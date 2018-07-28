@@ -7,6 +7,7 @@ terms of the Insight Maker Public License (https://InsightMaker.com/impl).
 
 */
 
+// Dialoge window handlers 
 var equationEditor;
 var converterDialog;
 var simulationSettings;
@@ -17,15 +18,56 @@ var aboutDialog;
 
 const aboutText = `
 <img src="graphics/stochsd_high.png" style="width: 128px; height: 128px"/><br/>
-<b>StochSD version 170722</b><br/>
+<b>StochSim version 180801</b><br/>
 <br/>
-<b>StochSD</b> (<u>Stoch</u>astic <u>S</u>ystem <u>D</u>ynamics) is an extension of System Dynamics into the field of stochastic modelling. In particular, you can make statistical analyses from multiple simulation runs.<br/>
+<b>StochSim</b> (<u>Stoch</u>astic <u>S</u>ystem <u>D</u>ynamics) is an extension of System Dynamics into the field of stochastic modelling. In particular, you can make statistical analyses from multiple simulation runs.<br/>
 <br/>
-StochSD is an open source program based on the <a target="_blank" href="http://insightmaker.com">Insight Maker engine</a> developed by Scott Fortmann-Roe. However, the graphic package of Insight Maker is replaced to make StochSD open for use as well as modifications and extensions. The file handling system is also rewritten (although the IM file specification is preserved). Finally a number of tools for optimisation, sensitivity analysis and statistical analysis are supplemented.<br/>
+StochSim is an open source program based on the <a target="_blank" href="http://insightmaker.com">Insight Maker engine</a> developed by Scott Fortmann-Roe. However, the graphic package of Insight Maker is replaced to make StochSim open for use as well as modifications and extensions. The file handling system is also rewritten (although the IM file specification is preserved). Finally a number of tools for optimisation, sensitivity analysis and statistical analysis are supplemented.<br/>
 <br/>
-StochSD was developed by Erik Gustafsson, dept. of Signals and Systems, Uppsala University, Uppsala, Sweden.<br/>
-Mail: Ekir.Gustafsson@gmail.com.
+StochSim was developed by Erik Gustafsson and Magnus Gustafsson, Uppsala University, Uppsala, Sweden.<br/>
+Mail: magnus.ja.gustafsson@gmail.com.
 `;
+
+// This values are not used by stochsim, as primitives cannot be resized in stochsim
+// They are only used for exporting the model to Insight Maker
+type_size = {};
+type_size["stock"] = [80,60];
+type_size["variable"] = [60,60];
+type_size["converter"] = [80,60];
+type_size["text"] = [120,60];
+
+type_basename = {};
+type_basename["stock"] = "Stock";
+type_basename["variable"] = "Variable";
+type_basename["flow"] = "Flow";
+type_basename["link"] = "Link";
+type_basename["converter"] = "Converter";
+type_basename["text"] = "Text";
+type_basename["constant"] = "Constant";
+
+last_connection = null;
+
+// Stores Visual objects and connections
+var connection_array = {};
+var object_array = {};
+
+// Stores state related to mouse
+var last_click_object_clicked = false;
+var last_clicked_element = null; // Points to the object we last clicked
+var mouseisdown = false;
+var mousedown_x = 0;
+var mousedown_y = 0;
+var lastMouseX = 0;
+var lastMouseY = 0;
+var empty_click_down = false;
+
+// Stores log for the global log
+var global_log = "";
+
+
+// default svg values 
+var defaultFill = "transparent";
+var defaultStroke = "black";
 
 
 function applicationReload() {
@@ -36,7 +78,7 @@ function applicationReload() {
 function preserveRestart() {
 	History.toLocalStorage();
 	localStorage.setItem("fileName",fileManager.fileName);
-	localStorage.setItem("reloadPending","1");
+	localStorage.setItem("reloadPending", "1");
 	applicationReload();
 }
 
@@ -44,7 +86,7 @@ function restoreAfterRestart() {
 	do_global_log("restoring");
 	let reloadPending = localStorage.getItem("reloadPending");
 	
-	if(reloadPending == null) {
+	if (reloadPending == null) {
 		// No reload is pending
 		do_global_log("nothing pending to restore");
 		return;
@@ -70,38 +112,47 @@ class History {
 		this.undoStates = [];
 		this.undoIndex = -1;
 		this.lastUndoState = "";
+		this.undoLimit = 10;
 		
 		// Tells if the last state is saved to file
 		// This is used for determining if the program should ask about saving
 		History.unsavedChanges = false;
 		
 	}
+	
 	static storeUndoState() {
+		// Create new XML for state
 		let InsightMakerDocumentWriter = new InsightMakerDocument();
 		InsightMakerDocumentWriter.appendPrimitives();
 		let undoState = InsightMakerDocumentWriter.getXmlString();
-		
-		
+
 		// Add to undo history if it is different then previus state
-		if(this.lastUndoState != undoState) {
-			this.undoStates.push(undoState);
-			this.undoIndex=this.undoStates.length-1;
-			this.lastUndoState = undoState;
+		if (this.lastUndoState != undoState) {
+			// Preserves only states from 0 to undoIndex
+			this.undoStates.splice(this.undoIndex+1);
 			
+			this.undoStates.push(undoState);
+			this.undoIndex = this.undoStates.length-1;
+			this.lastUndoState = undoState;
 			this.unsavedChanges = true;
+
+			if (this.undoLimit < this.undoStates.length) {
+				this.undoStates = this.undoStates.slice(this.undoStates.length - this.undoLimit);
+				this.undoIndex = this.undoStates.length-1;
+			}
 		}
 	}
-	
+
 	static forceCustomUndoState(newState) {
-		this.undoStates=[];
+		this.undoStates = [];
 		this.undoStates.push(newState);
-		this.undoIndex=0;
+		this.undoIndex = 0;
 		this.lastUndoState = newState;
 		this.unsavedChanges = false;
 	}
 	
 	static doUndo() {
-		if(this.undoIndex > 0) {
+		if (this.undoIndex > 0) {
 			this.undoIndex --;
 			this.restoreUndoState();	
 		} else {
@@ -110,7 +161,7 @@ class History {
 	}
 	
 	static doRedo() {
-		if(this.undoIndex < this.undoStates.length-1) {
+		if (this.undoIndex < this.undoStates.length-1) {
 			this.undoIndex ++;
 			this.restoreUndoState();
 		} else {
@@ -139,20 +190,20 @@ class History {
 	}
 	
 	static toLocalStorage() {
-		localStorage.setItem("undoState_length",this.undoStates.length);
+		localStorage.setItem("undoState_length", this.undoStates.length);
 		
 		for(let i in this.undoStates) {
-			let state=this.undoStates[i];
-			localStorage.setItem("undoState_"+i,state);
+			let state = this.undoStates[i];
+			localStorage.setItem("undoState_"+i, state);
 		}
 		
-		localStorage.setItem("undoIndex",this.undoIndex);
+		localStorage.setItem("undoIndex", this.undoIndex);
 	}
 	
 	static fromLocalStorage() {
 		this.clearUndoHistory();
 		let undoState_length = localStorage.getItem("undoState_length");
-		for(let i = 0;i < undoState_length; i++) {
+		for(let i = 0; i < undoState_length; i++) {
 			let state = localStorage.getItem("undoState_"+i);
 			this.undoStates.push(state);
 		}
@@ -174,18 +225,18 @@ function showPluginMenu() {
 }
 
 function sendToParentFrame(returnobj,target) {
-	results={};
-	results.target=target;
-	results.returnobj=returnobj;
+	results = {};
+	results.target = target;
+	results.returnobj = returnobj;
 	parent.postMessage(JSON.stringify(results), "*");
 }
 
 function loadPlugin(pluginName) {	
-	sendToParentFrame({"app_name":pluginName},"load_app");
+	sendToParentFrame({"app_name":pluginName}, "load_app");
 }
 
 function setParentTitle(newTitle) {	
-	sendToParentFrame({"title":newTitle},"update_title");
+	sendToParentFrame({"title":newTitle}, "update_title");
 }
 
 function quitQuestion() {
@@ -197,14 +248,15 @@ function quitQuestion() {
 }
 
 function makeKeyboardCodes() {
-	let keyboard={};
-	for(let tkey=0;tkey<=255;tkey++) {
+	let keyboard = {};
+	for(let tkey = 0; tkey <= 255; tkey++) {
 		keyboard[String.fromCharCode(tkey)] = tkey;
 	}
 	//~ alert(key["B"]);
 	keyboard["delete"] = 46;
 	keyboard["+"] = 187;
 	keyboard["-"] = 189;
+	keyboard["enter"] = 13;
 	return keyboard;
 }
 
@@ -222,19 +274,19 @@ function updateWindowSize() {
 	// Instead we wait until it is resized and then adopt to the result
 	setTimeout(function() {
 		var svgPosition = $("#svgplanebackground").position();
-		$("#svgplanebackground").width(windowWidth-50);
+		$("#svgplanebackground").width(windowWidth-18);
 		$("#svgplanebackground").height(windowHeight-svgPosition.top);
 	},100);
 	
 
 }
 
-defaultAttributeChangeHandler=function(primitive,attributeName,value) {
+defaultAttributeChangeHandler = function(primitive, attributeName, value) {
 	let id = getID(primitive);
 	let type = getType(primitive);
 	let visualObject = get_object(id);
-	if(visualObject) {
-		visualObject.attributeChangeHandler(attributeName,value);
+	if (visualObject) {
+		visualObject.attributeChangeHandler(attributeName, value);
 	}
 	
 	switch(attributeName) {
@@ -243,11 +295,11 @@ defaultAttributeChangeHandler=function(primitive,attributeName,value) {
 		break;
 	}
 	//~ do_global_log("tjohej "+type+" "+attributeName);
-	if(type=="Numberbox" && attributeName=="Target") {
+	if (type == "Numberbox" && attributeName == "Target") {
 		let visualObject = get_object(id);
 		// render() can only be done when the numberbox is fully loaded
 		// Therefor we have to check that visualObject is not null
-		if(visualObject) {
+		if (visualObject) {
 			visualObject.render();
 		}
 	}
@@ -256,11 +308,10 @@ defaultAttributeChangeHandler=function(primitive,attributeName,value) {
 defaultPositionChangeHandler = function(primitive) {
 	let newPosition = getCenterPosition(primitive)
 	let visualObject = object_array[getID(primitive)];
-	if(visualObject) {
+	if (visualObject) {
 		visualObject.set_pos(newPosition);
 	}
 }
-
 
 defaultPrimitiveCreatedHandler = function(primitive) {
 	syncVisual(primitive);
@@ -270,7 +321,7 @@ defaultPrimitiveBeforeDestroyHandler = function(primitive) {
 	stochsd_delete_primitive(getID(primitive));
 }
 
-var sdsMacros = `### Imported Macros from StochSD ###
+var sdsMacros = `### Imported Macros from StochSim ###
 T() <- Unitless(Time())
 DT() <- Unitless(TimeStep())
 TS() <- Unitless(TimeStart())
@@ -278,23 +329,23 @@ TL() <- Unitless(TimeLength())
 TE() <- Unitless(TimeEnd())
 PoFlow(Lambda) <- RandPoisson(Dt()*Lambda)/DT()
 PulseFcn(Start, Volume, Repeat) <- Pulse(Start, Volume/DT(), 0, Repeat) 
-### End of StochSD Macros ###
+### End of StochSim Macros ###
 ### Put your own macro code below ###`;
 
 // Add the StocSD macro-script to the beggning of the Macro
-function appendStochSDMacros() {
+function appendStochSimMacros() {
 	var macros = getMacros();
-	if(macros===undefined) {
-		macros="";
+	if (macros === undefined) {
+		macros = "";
 	}
-	if(macros.substring(0, sdsMacros.length) != sdsMacros) {
+	if (macros.substring(0, sdsMacros.length) != sdsMacros) {
 		macros = sdsMacros+"\n\n\n"+macros;
 		setMacros(macros);
 	}
 }
 
-// Replace macro with the StochSD macro-script
-function setStochSDMacros() {
+// Replace macro with the StochSim macro-script
+function setStochSimMacros() {
 	var macros = sdsMacros+"\n\n\n";
 	setMacros(macros);
 }
@@ -304,11 +355,11 @@ let showMacros = function() {
 };
 
 function getLinkedPrimitives(primitive) {
-	let result=[];
+	let result = [];
 	let allLinks = primitives("Link");
 	for(let link of allLinks) {
-		if(link.target == primitive) {
-			if(link.source != null) {
+		if (link.target == primitive) {
+			if (link.source != null) {
 				result.push(link.source);
 			}
 		}
@@ -446,11 +497,11 @@ function getFunctionHelpData() {
 		]]
 
 	];
-	helpData = helpData.sort(function(a, b){
+	helpData = helpData.sort(function(a, b) {
 		var categoryA = a[0];
 		var categoryB = b[0];
-		if(categoryA < categoryB) return -1;
-		if(categoryA > categoryB) return 1;
+		if (categoryA < categoryB) return -1;
+		if (categoryA > categoryB) return 1;
 		return 0;
 	});
 	return helpData;
@@ -473,8 +524,8 @@ function sdsLoadFunctions() {
 	defineFunction("TE", {params:[]}, function(x) {
         return new Material(simulate.timeEnd.toNum().value);
 	});
-    defineFunction("PoFlow", {params:[{name:"Rate", noUnits:true, noVector:true}]}, function(x){
-        var dt=simulate.timeStep.toNum().value;
+    defineFunction("PoFlow", {params:[{name:"Rate", noUnits:true, noVector:true}]}, function(x) {
+        var dt = simulate.timeStep.toNum().value;
         
         return new Material(RandPoisson(dt*x[0].toNum().value)/dt);
 	});
@@ -541,13 +592,13 @@ function makePrimitiveName(primitiveName)  {
 function stripBrackets(primitiveName) {
 	let cutFrom = primitiveName.lastIndexOf("[")+1;
 	let cutTo = primitiveName.indexOf("]");
-	if(cutFrom==-1) {
+	if (cutFrom == -1) {
 		cutFrom = 0;
 	}
-	if(cutTo==-1) {
+	if (cutTo == -1) {
 		cutTo = primitiveName.length;
 	}
-	return primitiveName.slice(cutFrom,cutTo);
+	return primitiveName.slice(cutFrom, cutTo);
 }
 
 function formatFunction(functionName) {
@@ -555,7 +606,7 @@ function formatFunction(functionName) {
 }
 
 function checkedHtmlAttribute(value) {
-	if(value) {
+	if (value) {
 		return ' checked="checked" ';
 	} else {
 		return ' ';
@@ -576,46 +627,42 @@ function stocsd_format(number, tdecimals) {
 	// Since the numbers automaticly goes to e-format when low enought
 	
 	// Used when e.g. the actuall error is reseted to null
-	if(number == null) {
+	if (number == null) {
 		return "";
 	}
     
     // If we force e-format we just convert here and return
-    if(stocsd_eformat) {
+    if (stocsd_eformat) {
         return number.toExponential(2).toUpperCase();
     }
 	
 	// Zero is a special case,
 	// since its not written as E-format by default even as its <1E-7
-    if(number == 0) {
+    if (number == 0) {
 		return "0";
 	}
 	
 	// Check if number is to small to be viewed in field
 	// If so, force e-format
 	
-	if(Math.abs(number)<Math.pow(10,(-tdecimals))) {
+	if (Math.abs(number)<Math.pow(10, (-tdecimals))) {
         return number.toExponential(2).toUpperCase();
 	}
 	//Check if the number is to big to be view ed in the field
-	if(Math.abs(number)>Math.pow(10,tdecimals)) {
+	if (Math.abs(number)>Math.pow(10, tdecimals)) {
         return number.toExponential(2).toUpperCase();
 	}
-	
 	
 	// Else format it as a regular number, and remove ending zeros
 	var stringified = number.toFixed(tdecimals).toUpperCase();
 	
-	
-
-
 	// Find the length of stringified, where the ending zeros have been removed
 	var i = stringified.length;
-	while(stringified.charAt(i-1)=='0') {
-		i=i-1;
+	while(stringified.charAt(i-1) == '0') {
+		i = i-1;
 		// If we find a dot. Stop removing decimals
-		if(stringified.charAt(i-1)=='.') {
-			i=i-1;
+		if (stringified.charAt(i-1) == '.') {
+			i = i-1;
 			break;
 		}
 	}
@@ -625,7 +672,7 @@ function stocsd_format(number, tdecimals) {
 }
 
 function get_parent_id(id) {
-	var parent_id=id.toString().split(".")[0];
+	var parent_id = id.toString().split(".")[0];
 	//~ do_global_log("x flowa "+parent_id);
 	return parent_id;
 }
@@ -634,10 +681,10 @@ function get_parent(child) {
 	return get_object(get_parent_id(child.id));
 }
 
-function is_family(id1,id2) {
-	var parent_id1=id1.toString().split(".")[0];
-	var parent_id2=id2.toString().split(".")[0];
-	if(parent_id1==parent_id2) {
+function is_family(id1, id2) {
+	var parent_id1 = id1.toString().split(".")[0];
+	var parent_id2 = id2.toString().split(".")[0];
+	if (parent_id1 == parent_id2) {
 		return true;
 	} else {
 		return false;
@@ -646,15 +693,15 @@ function is_family(id1,id2) {
 
 // Get a list of all children for a parent
 function getChildren(parentId) {
-	var result={}
+	var result = {}
 	for(var key in object_array) {
-		if(get_parent_id(key)==parentId && key!=parentId) {
-			result[key]=object_array[key];
+		if (get_parent_id(key) == parentId && key != parentId) {
+			result[key] = object_array[key];
 		}
 	}
 	for(var key in connection_array) {
-		if(get_parent_id(key)==parentId && key!=parentId) {
-			result[key]=connection_array[key];
+		if (get_parent_id(key) == parentId && key != parentId) {
+			result[key] = connection_array[key];
 		}
 	}
 	return result;
@@ -668,110 +715,87 @@ function hasSelectedChildren(parentId) {
 	// Find the children
 	let children = getChildren(parentId);
 	for(let id in children) {
-		if(children[id].is_selected()) {
+		if (children[id].is_selected()) {
 			return true;
 		}
 	}
 	return false;
 }
 
-
-
-var ghost_image='<path inkscape:connector-curvature="0"     d="m 6.8787701,-1.172115 c 0,0.94923948 0.1554403,8.1989876 -0.1943007,9.0150008 C 6.3347285,8.6644488 4.9635227,5.8111805 4.3473135,6.4329047 3.7255523,7.0546289 3.5034948,7.6319441 2.6818813,7.9816633 1.8602682,8.3258325 0.96093505,6.3884958 0.0116386,6.3884958 c -0.94929616,0 -1.8486295,1.9373367 -2.6702428,1.5931675 C -3.4802173,7.6319441 -3.6245546,7.3543882 -4.2463158,6.7326641 -4.8680773,6.1109399 -6.3614144,8.6922061 -6.7111551,7.870641 -7.0553443,7.0490771 -6.8554926,-0.22287552 -6.8554926,-1.172115 c 0,-3.7858565 3.0754975,-6.8611709 6.8671312,-6.8611709 3.7916334,0 6.8671315,3.0753144 6.8671315,6.8611709 z"     style="fill:#ffffff;stroke:#000000;stroke-width:0.7"     id="path18423" />';
-// This values are not used by stochsd, as primitives cannot be resized in stochsd
-// They are only used for exporting the model to Insight Maker
-
-type_size={};
-type_size["stock"]=[80,60];
-type_size["variable"]=[60,60];
-type_size["converter"]=[80,60];
-type_size["text"]=[120,60];
-
-type_basename={};
-type_basename["stock"]="Stock";
-type_basename["variable"]="Variable";
-type_basename["flow"]="Flow";
-type_basename["link"]="Link";
-type_basename["converter"]="Converter";
-type_basename["text"]="Text";
-
-last_connection=null;
-
-var last_click_object_clicked=false;
-var last_clicked_element = null; // Points to the object we last clicked
-var connection_array = {};
-var object_array = {};
-var mouseisdown = false;
-var mousedown_x=0;
-var mousedown_y=0;
-
-var lastMouseX = 0;
-var lastMouseY = 0;	
-
-var converter_xml = '<?xml version="1.0" encoding="UTF-8" standalone="no"?><!-- Created with Inkscape (http://www.inkscape.org/) --><svg   xmlns:dc="http://purl.org/dc/elements/1.1/"   xmlns:cc="http://creativecommons.org/ns#"   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"   xmlns:svg="http://www.w3.org/2000/svg"   xmlns="http://www.w3.org/2000/svg"   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"   width="100mm"   height="100mm"   viewBox="0 0 354.33071 354.33071"   id="svg3335"   version="1.1"   inkscape:version="0.91 r13725"   sodipodi:docname="converter.svg">  <defs     id="defs3337" />  <sodipodi:namedview     id="base"     pagecolor="#ffffff"     bordercolor="#666666"     borderopacity="1.0"     inkscape:pageopacity="0.0"     inkscape:pageshadow="2"     inkscape:zoom="0.35"     inkscape:cx="-215"     inkscape:cy="520"     inkscape:document-units="px"     inkscape:current-layer="layer1"     showgrid="false"     inkscape:window-width="1280"     inkscape:window-height="706"     inkscape:window-x="-8"     inkscape:window-y="-8"     inkscape:window-maximized="1" />  <metadata     id="metadata3340">    <rdf:RDF>      <cc:Work         rdf:about="">        <dc:format>image/svg+xml</dc:format>        <dc:type           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />        <dc:title></dc:title>      </cc:Work>    </rdf:RDF>  </metadata>  <g     inkscape:label="Layer 1"     inkscape:groupmode="layer"     id="layer1"     transform="translate(0,-698.0315)">    <path       style="fill:#800000;fill-rule:evenodd;stroke:#000000;stroke-width:0.65248114px;stroke-LineVisualap:butt;stroke-linejoin:miter;stroke-opacity:1"       d="m 16.912678,869.54033 88.301582,-90.64114 174.8011,-3.85707 63.07256,84.85554 -84.69745,96.42677 -182.009375,1.9285 z"       id="path3343"       inkscape:connector-curvature="0" />  </g></svg>';
-
 function default_double_click(id) {
 	var primitive_type = getType(findID(id));
-	if(primitive_type=="Ghost") {
+	if (primitive_type == "Ghost") {
 		// If we click on a ghost change id to point to source
-		id=findID(id).getAttribute("Source");
+		id = findID(id).getAttribute("Source");
 	}
-	equationEditor.open(id,".valueField");
+	equationEditor.open(id, ".valueField");
 }
 
-
-
-var empty_click_down = false;
-
-function calc_distance(xdiff,ydiff) {
-	return Math.sqrt((xdiff*xdiff)+(ydiff*ydiff));
+function calc_distance(xdiff, ydiff) {
+	return Math.sqrt((xdiff*xdiff) + (ydiff*ydiff));
 }
 
 class BaseObject {
 	constructor(id,type,pos) {
-		this.id=id;
-		this.type=type;
-		this.selected=false;
-		this.name_radius=30;
-		this.superClass="baseobject";
+		this.id = id;
+		this.type = type;
+		this.selected = false;
+		this.name_radius = 30;
+		this.superClass = "baseobject";
+		this.color = defaultStroke;
+		this.isDefined = false;
 		// Warning: this.primitve can be null, since all DIM objects does not have a IM object such as anchors and flow_auxiliarys
 		// We should therefor check if this.primitive is null, in case we dont know which class we are dealing with
 		this.primitive = findID(this.id);
 		
-		this.element_array=[];
-		this.selector_array=[];
-		this.group=null;
-		this.mountPoints=[[0,0]];
+		this.element_array = [];
+		this.selector_array = [];
+		this.icons; 	// svg_group with icons such as ghost and questionmark
+		this.group = null;
 		
-		this.rotatePosList=[[0,this.name_radius+8],[this.name_radius,0],[0,-this.name_radius],[-this.name_radius,0]];
-
+		this.namePosList = [[0, this.name_radius+8], [this.name_radius, 0], [0, -this.name_radius], [-this.name_radius, 0]];
 	}
 
-	get_mount_pos(closeToPoint) {
-		let pos = this.get_pos();
-		
-		// Check if we only have one mount point
-		if(this.mountPoints==1) {
-			return [pos[0]+this.mountPoints[0],pos[1]+this.mountPoints[1]];
-		}
-		
-		// Else calculate the closest one
-		let closedFoundPoint=this.mountPoints[0];
-		let closedFoundDistance = pointDistance(positionSum(this.mountPoints[0],pos),closeToPoint);
-		for(let mp of this.mountPoints) {
-			let tmpDistance = pointDistance(positionSum(mp,pos),closeToPoint);
-			if(tmpDistance < closedFoundDistance) {
-				closedFoundDistance=tmpDistance;
-				closedFoundPoint = mp;
+	setColor(color) {
+		this.color = color;
+		for (let element of this.element_array) {
+			if (element.getAttribute("class") == "element") {
+				element.setAttribute("stroke", this.color);
+			} else if(element.getAttribute("class") == "name_element") {
+				element.setAttribute("fill", this.color);
+			} else if(element.getAttribute("class") == "selector") {
+				element.setAttribute("fill", this.color);
 			}
 		}
-		return [pos[0]+closedFoundPoint[0],pos[1]+closedFoundPoint[1]];
+		if (this.primitive) {
+			// AnchorPoints has no primitve
+			this.primitive.setAttribute("color", this.color);
+		}
+	}
+
+	getBoundRect() {
+		// Override this function
+		// This functions returns a hash map, e.i. {"minX": 10, "maxX": 20, "minY": 40, "maxY": 50}
+		// The hashmap dictates in what rect mouse can click to create connections
+	}
+
+	getLinkMountPos(closeToPoint) {
+		return this.get_pos();
 	}
 	
 	is_selected() {
 		return this.selected;
 	}
-	
+
+	setDefined(value) {
+		this.isDefined = value;
+		if (this.isDefined) {
+			this.icons.setState("none");
+		} else {
+			this.icons.setState("questionmark");
+		}
+	}
+
 	clean() {
 			// Clean all children
 			let children = getChildren(this.id);
@@ -779,18 +803,18 @@ class BaseObject {
 				children[id].clean();
 				delete object_array[id];
 			}
-		
-			// Get the connections this object has before we clean it
-			var connection_array=find_connections(this);
 			
-			// Do the cleaning
-			for(var i in this.selector_array) {
-				this.selector_array[i].remove();
-			}
-			for(var key in this.element_array) {
-				this.element_array[key].remove();
-			}
-			this.group.remove();
+			this.clearImage();
+	}
+	clearImage() {
+		// Do the cleaning
+		for(var i in this.selector_array) {
+			this.selector_array[i].remove();
+		}
+		for(var key in this.element_array) {
+			this.element_array[key].remove();
+		}
+		this.group.remove();
 	}
 	double_click() {
 		// This function has to be overriden
@@ -798,7 +822,7 @@ class BaseObject {
 	afterNameChange() {
 		// Do nothing. this method is supposed to be overriden by subclasses
 	}
-	afterMove(diff_x,diff_y) {
+	afterMove(diff_x, diff_y) {
 		// Override this		
 	}
 	attachEvent() {
@@ -813,32 +837,32 @@ class BaseObject {
 	set name_pos(value) {
 		//~ alert("name pos for "+this.id+" "+getStackTrace());
 		//~ do_global_log("updating name pos to "+value);
-		this._name_pos=Number(value);
-		if(this.primitive) {
-			this.primitive.setAttribute("RotateName",value.toString());
+		this._name_pos = Number(value);
+		if (this.primitive) {
+			this.primitive.setAttribute("RotateName", value.toString());
 		}
 	}
-	
+	getType() {
+		return this.type;
+	}
 	name_double_click() {
 		//~ alert("hahaha");
-
-		
 					
-		if(this.is_ghost) {
+		if (this.is_ghost) {
 			errorPopUp("You must rename a ghost by renaming the original.");
 			return;
 		}
-		let id=get_parent_id(this.id)
-		equationEditor.open(id,".nameField");
+		let id = get_parent_id(this.id)
+		equationEditor.open(id, ".nameField");
 		event.stopPropagation();
 	}
 	
 	set_name(new_name) {
-			if(this.name_element==null) {
+			if (this.name_element == null) {
 				do_global_log("Element has no name");
 				return;
 			}
-			this.name_element.innerHTML=makePrimitiveName(new_name);
+			this.name_element.innerHTML = new_name;
 	}
 	
 	attributeChangeHandler(attributeName, value) {
@@ -847,97 +871,48 @@ class BaseObject {
 }
 
 class OnePointer extends BaseObject{
-	constructor(id,type,pos,extras=false) {
+	constructor(id, type, pos, extras = false) {
 		super(id,type,pos);
-		this.id=id;
-		this.type=type;
+		// Add object to global 
+		object_array[id] = this;
+		this.id = id;
+		this.type = type; 
 
-		this.element_array=[];
-		this.selector_array=[];
-		this.ghost_array=[];
-		this.group=null;
-		this.superClass="OnePointer";
-		var element_array = this.getImage();
-		if(element_array==false) {
-			alert("getImage() must be overriden to add graphics to this object");
-		}
-		this.draggable=true; // Default value, change it afterwords if you want
-		this.name_centered=false;
-		this.pos=pos;
-		this.element_array=element_array;
-		// Set selector element
+		this.element_array = [];
 		this.selector_array = [];
-		
-		this.is_ghost=false; // Default value
-		
-		if(extras!=false) {
+		this.group = null;
+		this.superClass = "OnePointer";
+		this.draggable = true; // Default value, change it afterwords if you want
+		this.name_centered = false;
+		this.pos = pos;
+		this.is_ghost = false; // Default value
+		if (extras != false) {
 			do_global_log("has extras");
-			if("is_ghost" in extras) {
-				this.is_ghost=extras["is_ghost"];
+			if ("is_ghost" in extras) {
+				this.is_ghost = extras["is_ghost"];
 			}
 		}
 		do_global_log("is ghost "+this.is_ghost);
-		
-		for(var key in element_array) {
-			if(element_array[key].getAttribute("class")=="selector") {
-				this.selector_array.push(element_array[key]);
-			}
-		}
-		
-		if(!this.is_ghost) {
-			for(var key in element_array) {
-				if(element_array[key].getAttribute("class")=="ghost") {
-					element_array[key].setAttribute("visibility","hidden");
-				}
-			}
-		}
-		
-			
-		// Set name element
-		this.name_element = null;
-		for(var key in element_array) {
-			if(element_array[key].getAttribute("class")=="name_element") {
-				this.name_element = element_array[key];
-				$(this.name_element).dblclick((event) => {
-					this.name_double_click();
-				});
-			}
-		}
-		this.group=svg_group(this.element_array);
-		this.group.setAttribute("class","testgroup");
-		this.group.setAttribute("node_id",id);
-		object_array[id]=this;
-		this.update();
 
-		
-		for(var key in this.element_array) {
-			var element = this.element_array[key];
-			$(element).on("mousedown",(event) => {
-				primitive_mousedown(this.id,event);
-			});
-		}
-		$(this.group).dblclick((event) => {
-			if(!$(event.target).hasClass("name_element")) {
-				this.double_click(this.id);
-			}
-		});
-		
-		
-		
+		this.loadImage();
 
-		
-		this.unselect();
+		this.select();
 		
 		// Handled for when attribute changes in corresponding SimpleNode
 		this.changeAttributeHandler = (attribute,value) => {
-			if(attribute=="name") {
+			if (attribute == "name") {
 				this.set_name(value);
 			}
 		}
 	}
-	
+
+	getBoundRect() {
+		let [x, y] = this.get_pos();
+		return {"minX": x-10, "maxX": x+10, "minY": y-10, "maxY": y+10};
+	}
+
 	set_pos(pos) {
-		if(pos[0]==this.pos[0] && pos[1]==this.pos[1]) {
+		if (pos[0] == this.pos[0] && pos[1] == this.pos[1]) {
 			// If the position has not changed we should not update it
 			// This turned out to be a huge optimisation
 			return;
@@ -953,24 +928,86 @@ class OnePointer extends BaseObject{
 		// Earlier we had a bug that was caused by get_pos was sent as reference and we got unwanted updates of the values
 		return [this.pos[0], this.pos[1]];
 	}
+
+
+	loadImage() {
+		var element_array = this.getImage();
+		if (element_array == false) {
+			alert("getImage() must be overriden to add graphics to this object");
+		}
+		
+		this.element_array = element_array;
+		
+		for(var key in element_array) {
+			if (element_array[key].getAttribute("class") == "selector") {
+				this.selector_array.push(element_array[key]);
+			}
+		}
+		
+		for (let key in element_array) {
+			if (element_array[key].getAttribute("class") == "icons") {
+				this.icons = this.element_array[key]
+				break;
+			}
+		}
+		
+		if (this.is_ghost && this.icons) {
+			this.icons.setState("ghost");
+		}
+		
+			
+		// Set name element
+		this.name_element = null;
+		for(var key in element_array) {
+			if (element_array[key].getAttribute("class") == "name_element") {
+				this.name_element = element_array[key];
+				$(this.name_element).dblclick((event) => {
+					this.name_double_click();
+				});
+			}
+		}
+		this.group = svg_group(this.element_array);
+		this.group.setAttribute("class", "testgroup");
+		this.group.setAttribute("node_id", this.id);
+		
+		this.update();
+
+		for(var key in this.element_array) {
+			var element = this.element_array[key];
+			$(element).on("mousedown",(event) => {
+				primitive_mousedown(this.id, event);
+			});
+		}
+		$(this.group).dblclick((event) => {
+			if (!$(event.target).hasClass("name_element")) {
+				this.double_click(this.id);
+			}
+		});
+	}
 	
 	select() {
-		this.selected=true;
+		this.selected = true;
 		for(var i in this.selector_array) {
-			this.selector_array[i].setAttribute("visibility","visible");
+			this.selector_array[i].setAttribute("visibility", "visible");
+		}
+		if (this.icons) {
+			this.icons.setColor("white");
 		}
 	}
 	unselect() {
-		this.selected=false;
+		this.selected = false;
 		for(var i in this.selector_array) {
-			this.selector_array[i].setAttribute("visibility","hidden");
+			this.selector_array[i].setAttribute("visibility", "hidden");
+		}
+		if (this.icons) {
+			this.icons.setColor(this.color);
 		}
 	}
 	afterUpdate() {
 		
 	}
 	update() {
-		this.group.setAttribute("transform","translate("+this.pos[0]+","+this.pos[1]+")");
+		this.group.setAttribute("transform", "translate("+this.pos[0]+","+this.pos[1]+")");
 		this.afterUpdate();
 	}
 	updatePosition() {
@@ -985,9 +1022,9 @@ class OnePointer extends BaseObject{
 	}
 }
 
-class primitivec extends OnePointer {
-	constructor(id,type,pos,extras) {
-		super(id,type,pos,extras);
+class BasePrimitive extends OnePointer {
+	constructor(id, type, pos, extras) {
+		super(id, type, pos, extras);
 	}
 	double_click() {
 		default_double_click(get_parent_id(this.id));
@@ -999,26 +1036,30 @@ const anchorTypeEnum = {
 	start:2,
 	end:3,
 	bezier1:4,
-	bezier2:5
+	bezier2:5,
+	orthoMiddle:6
 }
-class AnchorPoint extends OnePointer{
-	constructor(id,type,pos,anchorType) {
-		super(id,type,pos);
-		this.anchorType=anchorType;
+class AnchorPoint extends OnePointer {
+	constructor(id, type, pos, anchorType) {
+		super(id, type, pos);
+		this.anchorType = anchorType;
+		this.isSquare = false;
 	}
 	isAttached() {
-		let parentId = get_parent_id(this.id);
-		let parent = get_object(parentId);
+		let parent = get_parent(this);
+		if (! parent.getStartAttach) {
+			return;
+		}
 		switch(this.anchorType) {
 			case anchorTypeEnum.start:
-				if(parent.start_attach) {
+				if (parent.getStartAttach()) {
 					return true;
 				} else {
 					return false;
 				}
 			break;
 			case anchorTypeEnum.end:
-				if(parent.end_attach) {
+				if (parent.getEndAttach()) {
 					return true;
 				} else {
 					return false;
@@ -1030,24 +1071,24 @@ class AnchorPoint extends OnePointer{
 		}
 	}
 	setAnchorType(anchorType) {
-		this.anchorType=anchorType;
+		this.anchorType = anchorType;
 	}
 	getAnchorType() {
 		return this.anchorType;
 	}
 	setVisible(newVisible) {
-		if(newVisible) {
+		if (newVisible) {
 			for(let element of this.element_array) {
 				// Show all elements except for selectors
-				if(element.getAttribute("class")!="selector") {
-					element.setAttribute("visibility","visible");
+				if (element.getAttribute("class") != "selector") {
+					element.setAttribute("visibility", "visible");
 				}
 			}
 		}
 		else {
 			// Hide elements
 			for(let element of this.element_array) {
-				element.setAttribute("visibility","hidden");
+				element.setAttribute("visibility", "hidden");
 			}
 		}
 	}
@@ -1055,41 +1096,56 @@ class AnchorPoint extends OnePointer{
 		super.update();
 	}
 	afterUpdatePosition() {
-		let parentId = get_parent_id(this.id);
-		get_object(parentId).afterAnchorUpdate(this.anchorType);
+		let parent = get_parent(this);
+		if (parent.start_anchor && parent.end_anchor)  {
+			parent.afterAnchorUpdate(this.anchorType);	
+		}
 	}
 	updatePosition() {
 		this.update();
 		this.afterUpdatePosition();
 	}
 	unselect() {
-		this.selected=false;
+		this.selected = false;
 		super.unselect();
 	}
 	getImage() {
-		return [
-			svg_circle(0,0,4,"black","black","element"),
-			svg_circle(0,0,4,"red","red","selector")
-		];	
+		if (this.isSquare) {
+			return [
+				svg_rect(-4, -4, 8, 8, this.color, "white", "element"),
+				svg_rect(-4, -4, 8, 8, "none", this.color, "selector")
+			];
+		} else {
+			return [
+				svg_circle(0, 0, 4, this.color, "white", "element"),
+				svg_circle(0, 0, 4, "none", this.color, "selector")
+			];
+		}
+		
 	}
-	afterMove(diff_x,diff_y) {
+	makeSquare() {
+		this.isSquare = true;
+		this.clearImage();
+		this.loadImage();
+	}
+	afterMove(diff_x, diff_y) {
 		// This is an attempt to make beizer points move with the anchors points but id does not work well with undo
 		// commeted out until fixed
 		let parentId = get_parent_id(this.id);
 		let parent = get_object(parentId);
 		
-		if(parent.type=="link") {
+		if (parent.type == "link") {
 			switch(this.anchorType) {
 				case anchorTypeEnum.start:
 				{
-					let oldPos=parent.b1_anchor.get_pos();
-					parent.b1_anchor.set_pos([oldPos[0]+diff_x,oldPos[1]+diff_y]);
+					let oldPos = parent.b1_anchor.get_pos();
+					parent.b1_anchor.set_pos([oldPos[0]+diff_x, oldPos[1]+diff_y]);
 				}
 				break;
 				case anchorTypeEnum.end:
 				{
-					let oldPos=parent.b2_anchor.get_pos();
-					parent.b2_anchor.set_pos([oldPos[0]+diff_x,oldPos[1]+diff_y]);
+					let oldPos = parent.b2_anchor.get_pos();
+					parent.b2_anchor.set_pos([oldPos[0]+diff_x, oldPos[1]+diff_y]);
 				}
 				break;			
 			}
@@ -1097,29 +1153,47 @@ class AnchorPoint extends OnePointer{
 	}
 }
 
-class TextVisual extends primitivec{
-	constructor(id,type,pos,extras) {
-		super(id,type,pos,extras);
-		this.name_centered=true;
+class OrthoAnchorPoint extends AnchorPoint {
+	constructor(id, type, pos, anchorType, index) {
+		super(id, type, pos, anchorType);
+		this.changed = true;
+		this.index = index;
+	}
+	
+	afterMove(diff_x, diff_y) {
+		super.afterMove(diff_x, diff_y);
+		do_global_log("OrthoAnchor - afterMove() -"+this.id);
+		let parent = get_parent(this);
+		// Add adjust nighbor to FlowVisual
+		if ( ! get_parent(this).areAllAnchorsSelected()) {
+			parent.adjustNeighbors(this.index); 
+		}
+	}
+}
+
+class TextVisual extends BasePrimitive {
+	constructor(id, type, pos, extras) {
+		super(id, type, pos, extras);
+		this.name_centered = true;
 		update_name_pos(id);
 		this.setSelectionSizeToText();
 	}
 	setSelectionSizeToText() {
-		var boundingRect=this.name_element.getBoundingClientRect();
-		var rect=this.selector_array[0];
-		var margin=10;
-		rect.setAttribute("width",boundingRect.width+margin*2);
-		rect.setAttribute("height",boundingRect.height+margin*2);
-		rect.setAttribute("x",-boundingRect.width/2-margin);
-		rect.setAttribute("y",-boundingRect.height/2-margin);
+		var boundingRect = this.name_element.getBoundingClientRect();
+		var rect = this.selector_array[0];
+		var margin = 10;
+		rect.setAttribute("width", boundingRect.width+margin*2);
+		rect.setAttribute("height", boundingRect.height+margin*2);
+		rect.setAttribute("x", -boundingRect.width/2-margin);
+		rect.setAttribute("y", -boundingRect.height/2-margin);
 	}
 	afterNameChange() {
 		this.setSelectionSizeToText();
 	}
 	getImage() {
 		return [
-			svg_text(0,0,"text","name_element",{"style": "font-size: 16px"}),
-			svg_rect(-20,-15,40,30,"red","none","selector")
+			svg_text(0, 0, "text", "name_element", {"style": "font-size: 16px"}),
+			svg_rect( -20, -15, 40, 30, "red", "none", "selector")
 		];	
 	}
 	set_name(new_name) {
@@ -1141,25 +1215,108 @@ function pointDistance(point1,point2) {
 	return distance;
 }
 
-class StockVisual extends primitivec{
-	constructor(id,type,pos,extras) {
-		super(id,type,pos,extras);
-		this.mountPoints=[[0,-15],[0,15],[-20,0],[20,0]];
+function safeDivision(nominator, denominator) { 
+	// Make sure division by Zero does not happen 
+	if (denominator == 0) {
+		return 9999999; 
+	} else {
+		return nominator/denominator;
 	}
+}
+
+function sign(value) {
+	if (value < 0) {
+		return -1;
+	} else {
+		return 1;
+	}
+}
+
+class StockVisual extends BasePrimitive {
+	constructor(id, type, pos, extras) {
+		super(id, type, pos, extras);
+		this.namePosList = [[0, 29], [22, 5], [0, -19], [-22, 5]];
+	}
+
+	getSize() {
+		return [40, 30];
+	}
+
+	getBoundRect() {
+		let pos = this.get_pos()
+		let size = this.getSize();
+		return {
+			"minX": pos[0] - size[0]/2, 
+			"maxX": pos[0] + size[0]/2, 
+			"minY": pos[1] - size[1]/2, 
+			"maxY": pos[1] + size[1]/2 
+		};
+	}
+
+	// Used for FlowVisual
+	getFlowMountPos([xTarget, yTarget]) {
+		const [xCenter, yCenter] = this.get_pos();
+		const [width, height] = this.getSize();
+		const boxSlope = safeDivision(height, width);
+		const targetSlope = safeDivision(yTarget-yCenter, xTarget-xCenter);
+		let xEdge;
+		let yEdge; 
+		if (isInLimits(-boxSlope, targetSlope, boxSlope)) { // Left or right of box
+			xEdge = sign(xTarget-xCenter)*width/2 + xCenter;
+			if (isInLimits(yCenter-height/2, yTarget, yCenter+height/2)) { // if within box y-limits
+				yEdge = yTarget;
+			} else {
+				yEdge = yCenter + sign(yTarget-yCenter)*height/2
+			}
+		} else { // above or below box
+			if (isInLimits(xCenter-width/2, xTarget, xCenter+width/2)) {	// If within box x-limits
+				xEdge = xTarget;
+			} else {
+				xEdge = xCenter + sign(xTarget-xCenter)*width/2;
+			}
+			yEdge = sign(yTarget-yCenter) * (height/2) + yCenter;
+		}
+		return [xEdge, yEdge];
+	}
+
+	// Used for LinkVisual
+	getLinkMountPos([xTarget, yTarget]) {
+		// See "docs/code/mountPoints.svg" for math explanation 
+		const [xCenter, yCenter] = this.get_pos();
+		const [width, height] = this.getSize();
+		const boxSlope = safeDivision(height, width);
+		const targetSlope = safeDivision(yTarget-yCenter, xTarget-xCenter);
+		let xEdge;
+		let yEdge; 
+		if (isInLimits(-boxSlope, targetSlope, boxSlope)) {
+			const xSign = sign(xTarget-xCenter); // -1 if target left of box and 1 if target right of box 
+			xEdge = xSign * (width/2) + xCenter;
+			yEdge = xSign * (width/2) * targetSlope + yCenter;
+		} else {
+			const ySign = sign(yTarget-yCenter); // -1 if target above box and 1 if target below box
+			xEdge = ySign * safeDivision(height/2, targetSlope) + xCenter;
+			yEdge = ySign * (height/2) + yCenter;
+		}
+		return [xEdge, yEdge];
+	}
+
 	getImage() {
+		// let textElem = svg_text(0, 39, "stock", "name_element");
+		let textElem = svg_text(0, 39, this.primitive.getAttribute("name"), "name_element");
+		textElem.setAttribute("fill", this.color);
 		return [
-		svg_rect(-20,-15,40,30,"black","white","element"),
-		svg_group([svg_from_string(ghost_image)],svg_transform_string(0,0,0,1),"ghost"),
-		svg_rect(-20,-15,40,30,"red","none","selector"),
-		svg_text(0,39,"stock","name_element")
+			svg_rect(-20,-15,40,30,  this.color,  defaultFill, "element"),
+			svg_rect(-18, -13, 36, 26, "none", this.color, "selector"),
+			textElem,
+			svgIcons(defaultStroke, defaultFill, "icons")
 		];
 	}
 }
 
-class NumberboxVisual extends primitivec{
-	constructor(id,type,pos,extras) {
-		super(id,type,pos,extras);
-		this.name_centered=true;
+class NumberboxVisual extends BasePrimitive {
+	constructor(id, type, pos, extras) {
+		super(id, type, pos, extras);
+		this.name_centered = true;
 		update_name_pos(id);
 		this.setSelectionSizeToText();
 		
@@ -1169,11 +1326,11 @@ class NumberboxVisual extends primitivec{
 		RunResults.subscribeRun(this.runHandler);
 	}
 	setSelectionSizeToText() {
-		var boundingRect=this.name_element.getBoundingClientRect();
-		var elementRect=this.element_array[0];
-		var selectorRect=this.selector_array[0];
-		var marginX=10;
-		var marginY=2;
+		var boundingRect = this.name_element.getBoundingClientRect();
+		var elementRect = this.element_array[0];
+		var selectorRect = this.selector_array[0];
+		var marginX = 10;
+		var marginY = 2;
 		for(let rect of [elementRect,selectorRect]) {
 			rect.setAttribute("width",boundingRect.width+marginX*2);
 			rect.setAttribute("height",boundingRect.height+marginY*2);
@@ -1182,7 +1339,7 @@ class NumberboxVisual extends primitivec{
 		}
 	}
 	render() {
-		if(this.targetPrimitive == null) {
+		if (this.targetPrimitive == null) {
 			this.name_element.innerHTML = "-";
 			this.setSelectionSizeToText();
 			return;		
@@ -1191,12 +1348,12 @@ class NumberboxVisual extends primitivec{
 		let primitiveName = "";
 		let lastValue = RunResults.getLastValue(this.targetPrimitive);
 		let imPrimtiive = findID(this.targetPrimitive);
-		if(imPrimtiive) {
+		if (imPrimtiive) {
 			primitiveName += makePrimitiveName(getName(imPrimtiive));
 		} else {
 			primitiveName += "Unkown primitive";
 		}
-		if(lastValue) {
+		if (lastValue) {
 			valueString += stocsd_format(lastValue,3);
 		} else {
 			valueString += "?";
@@ -1217,9 +1374,9 @@ class NumberboxVisual extends primitivec{
 	}
 	getImage() {
 		return [
-			svg_rect(-20,-15,40,30,"black","white","element"),
-			svg_text(0,0,"","name_element",{"alignment-baseline": "middle", "style": "font-size: 16px"}),
-			svg_rect(-20,-15,40,30,"red","none","selector")
+			svg_rect(-20,-15,40,30, this.color, defaultFill, "element"),
+			svg_text(0,0, "", "name_element",{"alignment-baseline": "middle", "style": "font-size: 16px", "fill": this.color}),
+			svg_rect(-20,-15,40,30, "red", "none", "selector")
 		];	
 	}
 	name_double_click() {
@@ -1231,41 +1388,129 @@ class NumberboxVisual extends primitivec{
 	}
 }
 
-class VariableVisual extends primitivec{
-	constructor(id,type,pos,extras) {
-		super(id,type,pos,extras);
-		this.component45 = Math.pow((Math.pow(15,2)/2),0.5);; // The x and y component of a line going out 45 degrees with the length 15
-		this.mountPoints=[[0,-15],[0,15],[-15,0],[15,0],[-this.component45,-this.component45],[this.component45,-this.component45],[this.component45,this.component45],[-this.component45,this.component45]];
+class VariableVisual extends BasePrimitive {
+	constructor(id, type, pos, extras) {
+		super(id, type, pos, extras);
+		this.namePosList = [[0, 29],[18, 5],[0, -19],[-18, 5]];
 	}
-	getImage() {
+
+	getRadius() {
+		return 15;
+	}
+
+	getBoundRect() {
+	let pos = this.get_pos();
+	let radius = this.getRadius();
+		return {
+			"minX": pos[0] - radius,
+			"maxX": pos[0] + radius,
+			"minY": pos[1] - radius,
+			"maxY": pos[1] + radius
+		};
+	}
+
+	getImage () {
 		return [
-			svg_circle(0,0,15,"black","white","element"),
-			svg_text(0,0,"variable","name_element"),
-			svg_group([svg_from_string(ghost_image)],svg_transform_string(0,0,0,1),"ghost"),
-			svg_circle(0,0,15,"red","none","selector")
+			svg_circle(0,0,this.getRadius(), this.color, defaultFill, "element"),
+			svg_text(0,0, this.primitive.getAttribute("name"), "name_element", {"fill": this.color}),
+			svg_circle(0,0,this.getRadius()-2, "none", this.color, "selector"),
+			svgIcons(defaultStroke, defaultFill, "icons")
 		];
+	}
+
+	getLinkMountPos([xTarget, yTarget]) {
+		// See "docs/code/mountPoints.svg" for math explanation 
+		const [xCenter, yCenter] = this.get_pos();
+		const rTarget = pointDistance([xCenter, yCenter], [xTarget, yTarget]);
+		const dXTarget = xTarget - xCenter;
+		const dYTarget = yTarget - yCenter;
+		const dXEdge = safeDivision(dXTarget*this.getRadius(), rTarget);
+		const dYEdge = safeDivision(dYTarget*this.getRadius(), rTarget);
+		const xEdge = dXEdge + xCenter; 
+		const yEdge = dYEdge + yCenter;
+		return [xEdge, yEdge]; 
 	}
 }
 
-class ConverterVisual extends primitivec{
-	constructor(id,type,pos,extras) {
-		super(id,type,pos,extras);
-		this.mountPoints=[[-20,0],[20,0],[0,-15],[0,15]];
+class ConstantVisual extends VariableVisual {
+	constructor(id, type, pos, extras) {
+		super(id, type, pos, extras)
+	}
+
+	getImage() {
+		return [
+			svg_path("M0,15 15,0 0,-15 -15,0Z", this.color, defaultFill, "element"),
+			svg_text(0, 0, this.primitive.getAttribute("name"), "name_element", {"fill": this.color}),
+			svg_path("M0,12 12,0 0,-12 -12,0Z", "none", this.color, "selector"),
+			svgIcons(defaultStroke, defaultFill, "icons")
+		];
+	}
+
+	getLinkMountPos([xTarget, yTarget]) {
+		const [xCenter, yCenter] = this.get_pos();
+		const targetSlope = safeDivision(yCenter-yTarget, xCenter-xTarget);
+		
+		// "k" in the formula: y = kx + m
+		const edgeSlope = -sign(targetSlope);
+
+		// Where the line intercepts the x-axis ("m" in the formula: y = kx + m)
+		const edgeIntercept = 15*sign(yTarget - yCenter);
+		
+		// Relative coodinates relative center of ConstantVisual
+		const xEdgeRel = safeDivision(edgeIntercept, targetSlope-edgeSlope);
+		const yEdgeRel = edgeSlope*xEdgeRel + edgeIntercept;
+		
+		const xEdge = xEdgeRel + xCenter;
+		const yEdge = yEdgeRel + yCenter;
+		return [xEdge, yEdge];
+	}
+}
+
+class ConverterVisual extends BasePrimitive {
+	constructor(id, type, pos, extras) {
+		super(id, type, pos, extras);
+		this.namePosList = [[0, 29],[23, 5],[0, -19],[-23, 5]];
 	}
 	getImage() {
 		return [
-			svg_path("M-20 0  L-10 -15  L10 -15  L20 0  L10 15  L-10 15  Z","black","white","element"),
-			svg_path("M-20 0  L-10 -15  L10 -15  L20 0  L10 15  L-10 15  Z","red","none","selector"),
-			svg_group([svg_from_string(ghost_image)],svg_transform_string(0,0,0,1),"ghost"),
-			svg_text(0,0,"variable","name_element"),
+			svg_path("M-20 0  L-10 -15  L10 -15  L20 0  L10 15  L-10 15  Z", this.color, defaultFill, "element"),
+			svg_path("M-20 0  L-10 -15  L10 -15  L20 0  L10 15  L-10 15  Z", "none", this.color, "selector", {"transform": "scale(0.87)"}),
+			svgIcons(defaultStroke, defaultFill, "icons"),
+			svg_text(0,0, this.primitive.getAttribute("name"), "name_element", {"fill": this.color}),
 		];
 	}
+
+	getLinkMountPos([xTarget, yTarget]) {
+		// See "docs/code/mountPoints.svg" for math explanation 
+		const [xCenter, yCenter] = this.get_pos();
+		const hexSlope = safeDivision(15.0, 10);  // placement of corner is at (10,15)
+		const targetSlope = safeDivision(yTarget-yCenter, xTarget-xCenter);
+		let xEdgeRel; 	// Relative x Position to center of Visual object.
+		let yEdgeRel; 	// Relative y Position to center of Visual object.  
+		if (hexSlope < targetSlope || targetSlope < -hexSlope) {
+			const ySign = sign(yTarget - yCenter); 	// -1 if target above hexagon and 1 if target below hexagon 
+			xEdgeRel = ySign*safeDivision(15, targetSlope);
+			yEdgeRel = ySign*15; 
+		} else if (0 < targetSlope && targetSlope < hexSlope) {
+			const xSign = sign(xTarget - xCenter); // -1 if target left of hexagon and 1 if target right of hexagon
+			xEdgeRel = xSign*safeDivision(30, (3/2)+targetSlope);
+			yEdgeRel = xEdgeRel*targetSlope;
+		} else {
+			const xSign = sign(xTarget - xCenter); // -1 if target left of hexagon and 1 if target right of hexagon
+			xEdgeRel = xSign*safeDivision(30, (3/2)-targetSlope);
+			yEdgeRel = xEdgeRel*targetSlope;
+		}
+		const xEdge = xEdgeRel + xCenter;
+		const yEdge = yEdgeRel + yCenter;
+		return [xEdge, yEdge];
+	}
+
 	attachEvent() {
 		do_global_log("this primitive");
 		do_global_log(this.primitive);
 		let linkedPrimitives = getLinkedPrimitives(this.primitive);
 		do_global_log(linkedPrimitives);
-		if(linkedPrimitives.length > 0) {
+		if (linkedPrimitives.length > 0) {
 			do_global_log("choose yes");
 			this.primitive.value.setAttribute("Source", linkedPrimitives[0].id);
 		} else {
@@ -1274,52 +1519,67 @@ class ConverterVisual extends primitivec{
 		}
 	}
 	name_double_click() {
-		converterDialog.open(this.id,".nameField");
+		converterDialog.open(this.id, ".nameField");
 	}
 	
 	double_click() {
-		converterDialog.open(this.id,".valueField");
+		converterDialog.open(this.id, ".valueField");
 	}
 }
 
-class TwoPointer extends BaseObject{
-	constructor(id,type,pos) {
-		super(id,type,pos);
-		this.id=id;
-		this.type=type;
-		this.selected=false;
-		this.start_anchor=null;
-		this.end_anchor=null;
-		this.startx=pos[0];
-		this.starty=pos[1];
-		this.endx=pos[0];
-		this.endy=pos[1];
-		this.length=0;
-		this.superClass="TwoPointer";
-		connection_array[this.id]=this;
+class TwoPointer extends BaseObject {
+	constructor(id, type, pos) {
+		super(id, type, pos);
+		this.id = id;
+		this.type = type;
+		this.selected = false;
+		this.start_anchor = null;
+		this.end_anchor = null;
+		this.startx = pos[0];
+		this.starty = pos[1];
+		this.endx = pos[0];
+		this.endy = pos[1];
+		this.length = 0;
+		this.superClass = "TwoPointer";
+		connection_array[this.id] = this;
 		
 		this.makeGraphics();
-		$(this.group).on("mousedown",function(event){
-			var node_id=this.getAttribute("node_id");
-			primitive_mousedown(node_id,event);
+		$(this.group).on("mousedown",function(event) {
+			var node_id = this.getAttribute("node_id");
+			primitive_mousedown(node_id, event);
 		});
-		last_connection=this;
+		last_connection = this;
 		this.update();
 	}
-	
+
+	getBoundRect() {
+		return {
+			"minX": this.getMinX(),
+			"maxX": this.getMinX() + this.getWidth(),
+			"minY": this.getMinY(),
+			"maxY": this.getMinY() + this.getHeight()
+		};
+	}
+
+	setColor(color) {
+		super.setColor(color);
+		this.start_anchor.setColor(color);
+		this.end_anchor.setColor(color);
+	}
+
 	create_dummy_start_anchor() {
-		this.start_anchor = new AnchorPoint(this.id+".start_anchor","dummy_anchor",[this.startx,this.starty],anchorTypeEnum.start);
+		this.start_anchor = new AnchorPoint(this.id+".start_anchor", "dummy_anchor",[this.startx,this.starty],anchorTypeEnum.start);
 	}
 	create_dummy_end_anchor() {
-		this.end_anchor = new AnchorPoint(this.id+".end_anchor","dummy_anchor",[this.endx,this.endy],anchorTypeEnum.end);
+		this.end_anchor = new AnchorPoint(this.id+".end_anchor", "dummy_anchor",[this.endx,this.endy],anchorTypeEnum.end);
 	}
 	
 	get_pos() {
-		return [(this.startx+this.endx)/2,(this.starty+this.endy)/2];
+		return [(this.startx + this.endx)/2,(this.starty + this.endy)/2];
 	}
 	
 	getMinX() {
-		if(this.startx<this.endx) {
+		if (this.startx < this.endx) {
 			return this.startx;
 		} else {
 			return this.endx;
@@ -1327,7 +1587,7 @@ class TwoPointer extends BaseObject{
 	}
 
 	getMinY() {
-		if(this.starty<this.endy) {
+		if (this.starty < this.endy) {
 			return this.starty;
 		} else {
 			return this.endy;
@@ -1335,64 +1595,58 @@ class TwoPointer extends BaseObject{
 	}
 	
 	getWidth() {
-		return Math.abs(this.startx-this.endx);
+		return Math.abs(this.startx - this.endx);
 	}
 
 	getHeight() {
-		return Math.abs(this.starty-this.endy);
+		return Math.abs(this.starty - this.endy);
 	}
 
 	unselect() {
-		this.selected=false;
+		this.selected = false;
 		for(var anchor of get_anchors(this.id)) {
 			anchor.setVisible(false);
 		}
 	}
 	select() {
-		this.selected=true;
+		this.selected = true;
 		for(var anchor of get_anchors(this.id)) {
 			anchor.select();
 			anchor.setVisible(true);
 		}
 	}
 	
-	
-	
-	is_selected() {
-		return this.selected;
-	}
-	
 	update() {
 		// Get start position from anchor
-		if(this.start_anchor!=null) {
-				if(this.start_anchor.get_pos) {
-					var start_pos=this.start_anchor.get_pos();
-					this.startx=start_pos[0];
-					this.starty=start_pos[1];
+		if (this.start_anchor != null) {
+				if (this.start_anchor.get_pos) {
+					var start_pos = this.start_anchor.get_pos();
+					this.startx = start_pos[0];
+					this.starty = start_pos[1];
 				} else {
 					do_global_log("No start position");
 				}
 			}
 			
 			// Get end position from anchor
-			if(this.end_anchor!=null) {
-				if(this.end_anchor.get_pos) {
-					var end_pos=this.end_anchor.get_pos();
-					this.endx=end_pos[0];
-					this.endy=end_pos[1];
+			if (this.end_anchor != null) {
+				if (this.end_anchor.get_pos) {
+					var end_pos = this.end_anchor.get_pos();
+					this.endx = end_pos[0];
+					this.endy = end_pos[1];
 				} else {
 					do_global_log("No end position");
 				}
 			}
-			let xdiff = (this.endx-this.startx);
-			let ydiff = (this.endy-this.starty);
+			let xdiff = (this.endx - this.startx);
+			let ydiff = (this.endy - this.starty);
 			
 			// Force minimum size on TwoPointers
 			const minWidth = 10;
 			const minHeight = 10;
-			if(this.getWidth() < minWidth && this.getHeight() < minHeight) {
-				this.endx=this.startx+minWidth;
-				this.endy=this.starty+minHeight;
+			if (this.getWidth() < minWidth && this.getHeight() < minHeight) {
+				this.endx = this.startx + minWidth;
+				this.endy = this.starty + minHeight;
 			}
 			
 			this.length = Math.sqrt(xdiff*xdiff+ydiff*ydiff);
@@ -1420,9 +1674,9 @@ class TwoPointer extends BaseObject{
 	}
 }
 
-class BaseConnection extends TwoPointer{
-	constructor(id,type,pos) {
-		super(id,type,pos);
+class BaseConnection extends TwoPointer {
+	constructor(id, type, pos) {
+		super(id, type, pos);
 		this._start_attach = null;
 		this._end_attach = null;
 		this.positionUpdateHandler = () => {
@@ -1433,17 +1687,25 @@ class BaseConnection extends TwoPointer{
 			this.end_anchor.set_pos(targetPoint);
 			alert("Position got updated");
 		}
-		last_connection=this;
+		this.attachableTypes = ["stock", "variable", "converter", "flow"];
+		last_connection = this;
 	}
-	set start_attach(new_start_attach) {
-		// Trigger the attach event on the old attachment primitives
-		this.triggerAttachEvents();
+	setAttachableTypes(types) {
+		this.attachableTypes = types;
+	}
+	setStartAttach(new_start_attach) {
+		if (new_start_attach != null && this.getEndAttach() == new_start_attach) {
+			return;		// Will not attach if other anchor is attached to same
+		}
+		if (new_start_attach != null && ! this.attachableTypes.includes(new_start_attach.getType())) {
+			return; 	// Will not attach if not acceptable attachType
+		}
 		
 		// Update the attachment primitive
 		this._start_attach = new_start_attach;
 		
 		let sourcePrimitive = null;
-		if(this._start_attach!=null) {
+		if (this._start_attach != null) {
 			sourcePrimitive = findID(this._start_attach.id);
 		}
 		setSource(this.primitive, sourcePrimitive);
@@ -1451,18 +1713,22 @@ class BaseConnection extends TwoPointer{
 		// Trigger the attach event on the new attachment primitives
 		this.triggerAttachEvents();
 	}
-	get start_attach() {
+	getStartAttach() {
 		return this._start_attach;
 	}
-	set end_attach(new_end_attach) {
+	setEndAttach(new_end_attach) {
 		do_global_log("end_attach");
-		// Trigger the attach event on the old attachment primitives
-		this.triggerAttachEvents();
+		if (new_end_attach != null && this.getStartAttach() == new_end_attach) {
+			return; 	// Will not attach if other anchor is attached to same 
+		}
+		if (new_end_attach != null && ! this.attachableTypes.includes(new_end_attach.getType())) {
+			return;		// Will not attach if not acceptable attachType
+		}
 		
 		// Update the attachment primitive
 		this._end_attach = new_end_attach;
 		let targetPrimitive = null;
-		if(this._end_attach!=null) {
+		if (this._end_attach != null) {
 			targetPrimitive = findID(this._end_attach.id);
 		}
 		setTarget(this.primitive, targetPrimitive);
@@ -1470,52 +1736,21 @@ class BaseConnection extends TwoPointer{
 		// Trigger the attach event on the new attachment primitives
 		this.triggerAttachEvents();
 	}
-	get end_attach() {
+	getEndAttach() {
 		return this._end_attach;
 	}
 	triggerAttachEvents() {
 		// We must always trigger both start and end, since a change in the start might affect the logics of the primitive attach at the end of a link or flow
-		if(this._start_attach!=null) {
-			this._start_attach.attachEvent();
+		if (this.getStartAttach() != null) {
+			this.getStartAttach().attachEvent();
 		}
-		if(this._end_attach!=null) {
-			this._end_attach.attachEvent();
+		if (this.getEndAttach() != null) {
+			this.getEndAttach().attachEvent();
 		}
 	}
 	clean() {
 		this.triggerAttachEvents();
 		super.clean();
-	}
-	update() {
-		// This function is simular to TwoPointer update but it takes attachments into account
-		
-		// Get start position from attach
-		// start_anchor is null if we are currently creating the connection
-		// start_attach is null if we are not attached to anything
-		
-		let connectionCenter = this.get_pos();
-		
-		if(this.start_attach!=null && this.start_anchor!=null) {
-			if(this.start_attach.get_pos) {
-				let oldPos = this.start_anchor.get_pos();
-				let newPos = this.start_attach.get_mount_pos(connectionCenter);
-				// If start point have moved reset b1
-				if(oldPos[0]!=newPos[0] || oldPos[1] != newPos[1]) {
-					this.start_anchor.set_pos(newPos);
-				}
-			}
-		}
-		if(this.end_attach!=null && this.end_anchor!=null) {
-			if(this.end_attach.get_pos) {
-				let oldPos = this.end_anchor.get_pos();
-				let newPos = this.end_attach.get_mount_pos(connectionCenter);
-				// If end point have moved reset b2
-				if(oldPos[0]!=newPos[0] || oldPos[1] != newPos[1]) {
-					this.end_anchor.set_pos(newPos);
-				}
-			}
-		}
-		super.update();
 	}
 	updateGraphics() {			
 
@@ -1523,52 +1758,295 @@ class BaseConnection extends TwoPointer{
 	linearInterpolation(progress) {
 		// Find a point at the progress place along a line between start and end
 		// progress is between 0 and 1
-		if(this.start_attach!=null) {
+		if (this.getStartAttach() != null) {
 			[this.startx, this.starty] = this.start_anchor.get_pos();
 		}
-		if(this.end_attach!=null) {
+		if (this.getEndAttach() != null) {
 			[this.endx, this.endy] = this.end_anchor.get_pos();
 		}
-		let start=[this.startx,this.starty];
-		let end=[this.endx,this.endy];
-		let result=[start[0]*(1-progress)+end[0]*progress,start[1]*(1-progress)+end[1]*progress];
+		let start = [this.startx, this.starty];
+		let end = [this.endx, this.endy];
+		let result = [start[0]*(1-progress)+end[0]*progress,start[1]*(1-progress)+end[1]*progress];
 		return result;
 	}
 }
 
 class FlowVisual extends BaseConnection {
-	constructor(id,type,pos) {
-		super(id,type,pos);
-		this.mountPoints=[[-15,15],[15,15],[0,30],[0,-10]];
-		this.rotatePosList=[[0,48],[25,18],[0,-30],[-25,18]];
-	}
-	
-	updateLength() {
-		// The rotation of the arrowhead is upwards until rotated
-		const halfWidth=1.5;
-		const headHalfWidth = 7;
-		var newPath = `M0,0 ${headHalfWidth},10 ${halfWidth},10 ${halfWidth},${this.length} -${halfWidth},${this.length} -${halfWidth},10 -${headHalfWidth},10 Z`;
-		this.arrowPath.setAttribute("d",newPath);
-	}
-	
-	makeGraphics() {
-		this.arrowPath=svg_from_string(`<path d="M0,0 0,0" stroke="black" fill="white"/>`);
-		this.updateLength();
-		this.arrowhead=svg_group([this.arrowPath]);
-		svg_translate(this.arrowhead,this.endx,this.endy);
+	constructor(id, type, pos) {
+		super(id, type, pos);
+		this.setAttachableTypes(["stock"]);
+		this.namePosList = [[0,36],[28,5],[0,-30],[-28,5]]; 	// Textplacement when rotating text
+		
+		// List of anchors. Not start- and end-anchor. TYPE: [AnchorPoints]
+		this.anchorPoints = []; 
 
-		this.name_element = svg_text(0,0,"variable","name_element");
-		this.flowcore = svg_group([ 
-			svg_circle(0,15,15,"black","white","element"),
-			svg_path("M0,0 -10,-10 10,-10 Z","black","white","element"),
-			this.name_element
-		],svg_transform_string(100,100,0,1));
+		this.valveIndex; 	// index to indicate what inbetween path valve is placed
+		this.variableSide;	// bool to indicate what side of path variable is placed
+
+		this.startCloud;
+		this.endCloud;
+		this.outerPath; 	// Black path element
+		this.innerPath; 	// White path element
+		this.arrowHeadPath; // Head of Arrow element
+		this.flowPathGroup; // Group element with outer- inner- & arrowHeadPath within.
+		this.valve; 
+		this.variable; 		// variable (only svg group-element with circle and text)
+	}
+
+	areAllAnchorsSelected() {
+		for (i = 0; i < this.anchorPoints.length; i++) {
+			if ( ! this.anchorPoints[i].is_selected()) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	getPreviousAnchor(index) { // Index is index of Anchor in this.anchorPoints
+		if (index == 0) {
+			return this.start_anchor;
+		} else {
+			return this.anchorPoints[index-1];
+		}
+	}
+
+	getNextAnchor(index) { // Index is index of Anchor in this.anchorPoints
+		if (this.anchorPoints.length-1 == index) {
+			return this.end_anchor;
+		} else {
+			return this.anchorPoints[index+1];
+		} 
+	}
+
+	afterAnchorUpdate(anchorType) {
+		// Save middle anchor points to primitive
+		super.afterAnchorUpdate(anchorType);
+		let middlePoints = "";
+		for (i = 1; i < this.anchorPoints.length-1; i++) {
+			let pos = this.anchorPoints[i].get_pos();
+			let x = pos[0];
+			let y = pos[1];
+			middlePoints += `${x},${y} `;
+		}
+		this.primitive.value.setAttribute("MiddlePoints", middlePoints);
+	}
+
+	adjustNeighborAnchor(masterAnchor, slaveAnchor) {
+		let masterPos = masterAnchor.get_pos();
+		let slavePos = slaveAnchor.get_pos();
+		let dir = neswDirection(masterPos, slavePos);
+		let dist = 15; 		// mininum distance from master and slave anchor
+		if (dir == "north" || dir == "south") {
+
+			// Keep masterAnchor at distance from slaveAnchor 
+			if (slavePos[1]-dist < masterPos[1] && masterPos[1] <= slavePos[1]) { // if too close above
+				masterAnchor.set_pos([masterPos[0], slavePos[1]+dist]);			// switch side
+			} else if (slavePos[1] <= masterPos[1] && masterPos[1] < slavePos[1]+dist) { // if too close below 
+				masterAnchor.set_pos([masterPos[0], slavePos[1]-dist]); 		// switch side
+			}
+			
+			slaveAnchor.set_pos([masterPos[0], slavePos[1]]);
+		} else {
+
+			// Keep masterAnchor at distance from slaveAnchor 
+			if ((slavePos[0]-dist < masterPos[0]) && (masterPos[0] <= slavePos[0])) { // if to close left
+				masterAnchor.set_pos([slavePos[0]+dist, masterPos[1]]);				// switch to right side
+			} else if (slavePos[0] <= masterPos[0] && masterPos[0] < slavePos[0]+dist) { // if to close to right side
+				masterAnchor.set_pos([slavePos[0]-dist, masterPos[1]]);				// switch to left side 
+			}
+
+			slaveAnchor.set_pos([slavePos[0], masterPos[1]]);
+		}
+	}
+
+	adjustNeighbors(anchorIndex) {
+		let anchor = this.anchorPoints[anchorIndex];
+
+		// Adjust previous Neighbor
+		let prevAnchor = this.getPreviousAnchor(anchorIndex);
+		this.adjustNeighborAnchor(anchor, prevAnchor);
+
+		// Adjust next Neighbor
+		let nextAnchor = this.getNextAnchor(anchorIndex);
+		this.adjustNeighborAnchor(anchor, nextAnchor);
+	}
+
+	create_dummy_start_anchor() {
+		this.start_anchor = new OrthoAnchorPoint(
+			this.id+".start_anchor", 
+			"dummy_anchor", 
+			[this.startx, this.starty], 
+			anchorTypeEnum.start, 
+			0
+		);
+		this.anchorPoints[0] = (this.start_anchor);
+	}
+	
+	create_dummy_end_anchor() {
+		this.end_anchor = new OrthoAnchorPoint(
+			this.id+".end_anchor", 
+			"dummy_anchor", 
+			[this.endx, this.endy],
+			anchorTypeEnum.end,
+			this.anchorPoints.length
+		)
+		this.anchorPoints[this.anchorPoints.length] = this.end_anchor; 
+	}
+
+	getLinkMountPos([xTarget, yTarget]) {
+		// See "docs/code/mountPoints.svg" for math explanation 
+		const [xCenter, yCenter] = this.getVariablePos();
+		const rTarget = pointDistance([xCenter, yCenter], [xTarget, yTarget]);
+		const dXTarget = xTarget - xCenter;
+		const dYTarget = yTarget - yCenter;
+		const dXEdge = safeDivision(dXTarget*15, rTarget);
+		const dYEdge = safeDivision(dYTarget*15, rTarget);
+		const xEdge = dXEdge + xCenter; 
+		const yEdge = dYEdge + yCenter;
+		return [xEdge, yEdge]; 
+	}
+
+	moveValve () {
+		if (this.variableSide) {
+			this.valveIndex = (this.valveIndex+1)%(this.anchorPoints.length-1);
+		}
+		this.variableSide = !this.variableSide;
+
+		this.primitive.setAttribute("valveIndex", this.valveIndex);
+		this.primitive.setAttribute("variableSide", this.variableSide);
+
+		update_all_objects();
+	}
+
+	createAnchorPoint(x, y) {
+		let index = this.anchorPoints.length;
+		let newAnchor = new OrthoAnchorPoint(
+			this.id+".point"+index, 
+			"dummy_anchor", 
+			[this.endx, this.endy], 
+			anchorTypeEnum.orthoMiddle, 
+			index
+		);
+		this.anchorPoints.push(newAnchor);
+	}
+	
+	parseMiddlePoints(middlePointsString) {
+		if (middlePointsString == "") {
+			return [];
+		}
+		// example input: "15,17 19,12 "
+		
+		// example ["15,17", "19,12"]
+		let stringPoints = middlePointsString.trim().split(" ");
+		
+		// example [["15", "17"], ["19", "12"]]
+		let stringDimension = stringPoints.map(stringPos => stringPos.split(","));
+		
+		// example [[15,17], [19,12]]
+		let points = stringDimension.map(dim => [parseInt(dim[0]), parseInt(dim[1])]);
+
+		return points;
+	}
+
+	loadMiddlePoints() {
+		let middlePointsString = this.primitive.getAttribute("MiddlePoints");
+		if (! middlePointsString) {
+			return [];
+		}
+		let points = this.parseMiddlePoints(middlePointsString);
+		for (let point of points) {
+			let index = this.anchorPoints.length;
+			let newAnchor = new OrthoAnchorPoint(
+				this.id+".point"+index, 
+				"dummy_anchor", 
+				point,
+				anchorTypeEnum.orthoMiddle, 
+				index
+			);
+			this.anchorPoints.push(newAnchor);
+		}
+	}
+
+	getBoundRect() {
+		let pos = this.getVariablePos();
+		return {
+			"minX": pos[0] - 15, 
+			"maxX": pos[0] + 15,
+			"minY": pos[1] - 15,
+			"maxY": pos[1] + 15
+		};
+	}
+
+	getValvePos() {
+		let points = this.getPathPoints();
+		let valveX = (points[this.valveIndex][0]+points[this.valveIndex+1][0])/2;
+		let valveY = (points[this.valveIndex][1]+points[this.valveIndex+1][1])/2;
+		return [valveX, valveY];
+	}
+
+	getValveRotation() {
+		let points = this.getPathPoints();
+		let dir = neswDirection(points[this.valveIndex], points[this.valveIndex+1]);
+		let valveRot = 0;
+		if (dir == "north" || dir == "south") {
+			valveRot = 90;
+		}
+		return valveRot;
+	}
+
+	getVariablePos() {
+		let points = this.getPathPoints();
+		let dir = neswDirection(points[this.valveIndex], points[this.valveIndex+1]);
+		let variableOffset = [0, 0];
+		if (dir == "north" || dir == "south") {
+			if (this.variableSide) {
+				variableOffset = [15, 0];
+			} else {
+				variableOffset = [-15, 0];
+			}
+		} else {
+			if (this.variableSide) {
+				variableOffset = [0, -15];
+			} else {
+				variableOffset = [0, 15];
+			}
+		} 
+		let [valveX, valveY] = this.getValvePos();
+		return [valveX+variableOffset[0], valveY+variableOffset[1]];
+	}
+
+	setColor(color) {
+		this.color = color;
+		this.primitive.setAttribute("color", this.color);
+		this.startCloud.setAttribute("stroke", color);
+		this.endCloud.setAttribute("stroke", color);
+		this.outerPath.setAttribute("stroke", color);
+		this.arrowHeadPath.setAttribute("stroke", color);
+		this.valve.setAttribute("stroke", color);
+		this.variable.getElementsByClassName("element")[0].setAttribute("stroke", color)
+		this.name_element.setAttribute("fill", color);
+		this.anchorPoints.map(anchor => anchor.setColor(color));
+	}
+
+	makeGraphics() {
+		this.startCloud = svgCloud(this.color, defaultFill, {"class": "element"});
+		this.endCloud = svgCloud(this.color, defaultFill, {"class": "element"});
+		this.outerPath = svgWidePath(5, this.color, {"class": "element"});
+		this.innerPath = svgWidePath(3, "white"); // Must have white ohterwise path is black
+		this.arrowHeadPath = svgArrowHead(this.color, defaultFill, [1,0], {"class": "element"});
+		this.flowPathGroup = svg_group([this.startCloud, this.endCloud, this.outerPath, this.innerPath, this.arrowHeadPath]);
+		this.valve = svg_path("M10,10 -10,-10 10,-10 -10,10 Z", this.color, defaultFill, "element");
+		this.name_element = svg_text(0, -15, "vairable", "name_element");
+		this.variable = svg_group([svg_circle(0, 0, 15, defaultStroke, "white", "element"), this.name_element]);
+		this.anchorPoints = [];
+		this.valveIndex = 0;
+		this.variableSide = false;
 		
 		$(this.name_element).dblclick((event) => {	
 			this.name_double_click();
 		});
 		
-		this.group=svg_group([this.arrowhead,this.flowcore]);
+		this.group = svg_group([this.flowPathGroup, this.valve, this.variable]);
 		this.group.setAttribute("node_id",this.id);
 
 		$(this.group).dblclick(() => {
@@ -1576,15 +2054,103 @@ class FlowVisual extends BaseConnection {
 		});
 	}
 	
-	updateGraphics() {
-		let xdiff=this.endx-this.startx;
-		let ydiff=this.endy-this.starty;
-		let angle=Math.atan2(xdiff,-ydiff)*(180/Math.PI);
-		svg_transform(this.arrowhead,this.endx,this.endy,angle,1);
+	getDirection() {
+		// This function is used to determine which way the arrowHead should aim 
+		let points = this.getPathPoints();
+		let len = points.length;
+		let p1 = points[len-1];
+		let p2 = points[len-2];
+		return [p2[0]-p1[0], p2[1]-p1[1]];
+	}
+
+	shortenLastPoint(shortenAmount) {
+		let points = this.getPathPoints();
+		let last = points[points.length-1];
+		let secondLast = points[points.length-2];
+		let sine = sin(last, secondLast);
+		let cosine = cos(last, secondLast);
+		let newLast = rotate([shortenAmount, 0], sine, cosine);
+		newLast = translate(newLast, last);
+		points[points.length-1] = newLast;
+		return points;
+	}
+
+	getPathPoints() {
+		let points = this.anchorPoints.map(point => point.get_pos());
+		if (points.length == 0) {
+			points = [[this.startx, this.starty], [this.endx, this.endy]];
+		} else if (this.anchorPoints[this.anchorPoints.length-1].getAnchorType() != anchorTypeEnum.end) {
+			points.push([this.endx, this.endy]);
+		}
+		return points;
+	}
+
+	update() {
+		// This function is similar to TwoPointer::update but it takes attachments into account
 		
-		let auxiliaryPos = [(this.startx+this.endx)/2, (this.starty+this.endy)/2];
-		svg_transform(get_object(this.id).flowcore,auxiliaryPos[0],auxiliaryPos[1],0,1);
-		this.updateLength();
+		// Get start position from attach
+		// _start_attach is null if we are not attached to anything
+		
+		let points = this.getPathPoints();
+		let connectionStartPos = points[1];
+		let connectionEndPos = points[points.length-2]; 
+
+		if (this.getStartAttach() != null && this.start_anchor != null) {
+			if (this.getStartAttach().get_pos) {
+				let oldPos = this.start_anchor.get_pos();
+				let newPos = this.getStartAttach().getFlowMountPos(connectionStartPos);
+				// If start point have moved reset b1
+				if (oldPos[0] != newPos[0] || oldPos[1] != newPos[1]) {
+					this.start_anchor.set_pos(newPos);
+				}
+			}
+		}
+		if (this.getEndAttach() != null && this.end_anchor != null) {
+			if (this.getEndAttach().get_pos) {				
+				let oldPos = this.end_anchor.get_pos();
+				let newPos = this.getEndAttach().getFlowMountPos(connectionEndPos);
+				// If end point have moved reset b2
+				if (oldPos[0] != newPos[0] || oldPos[1] != newPos[1]) {
+					this.end_anchor.set_pos(newPos);
+				}
+			}
+		}
+		super.update();
+		if (this.start_anchor && this.end_anchor) {
+			this.adjustNeighborAnchor(this.anchorPoints[0], this.anchorPoints[1]);
+			this.adjustNeighborAnchor(this.anchorPoints[this.anchorPoints.length-1], this.anchorPoints[this.anchorPoints.length-2]);
+		}
+	}
+	
+	updateGraphics() {
+		let points = this.getPathPoints();
+		if (this.getStartAttach() == null) {
+			this.startCloud.setVisibility(true);
+			this.startCloud.setPos(points[0], points[1]);
+		} else {
+			this.startCloud.setVisibility(false);
+		}
+		if (this.getEndAttach() == null) {
+			this.endCloud.setVisibility(true);
+			this.endCloud.setPos(points[points.length-1], points[points.length-2]);
+		} else {
+			this.endCloud.setVisibility(false);
+		}
+		this.outerPath.setPoints(this.shortenLastPoint(12));
+		this.innerPath.setPoints(this.shortenLastPoint(8));
+		this.arrowHeadPath.setPos(points[points.length-1], this.getDirection());
+
+		let [valveX, valveY] = this.getValvePos();
+		let valveRot = this.getValveRotation();
+		let [varX, varY] = this.getVariablePos();
+		svg_transform(this.valve, valveX, valveY, valveRot, 1);
+		svg_translate(this.variable, varX, varY);
+		// Update
+		this.startCloud.update();
+		this.endCloud.update();
+		this.outerPath.update();
+		this.innerPath.update();
+		this.arrowHeadPath.update();
 	}
 	
 	double_click() {
@@ -1603,28 +2169,58 @@ function getStackTrace() {
 
 class RectangleVisual extends TwoPointer {
 	makeGraphics() {
-		var dash="";
-		this.element=svg_rect(this.startx,this.starty,this.endx,this.endy,"black","none","element",dash); //svg_line(this.startx,this.starty,this.endx,this.endy,"black","white","element",dash);
-		this.coordRect=new CoordRect();
-		this.coordRect.element=this.element;
-		this.group=svg_group([this.element]);
+		this.element = svg_rect(
+			this.startx, 
+			this.starty, 
+			this.endx, 
+			this.endy, 
+			defaultStroke, 
+			"none", 
+			"element"
+		);
+
+		// Invisible rect to more easily click
+		this.clickRect = svg_rect(
+			this.startx, 
+			this.starty, 
+			this.endx, 
+			this.endy, 
+			"transparent", 
+			"none"
+		);
+		this.clickRect.setAttribute("stroke-width", "10");
+
+		this.coordRect = new CoordRect();
+		this.coordRect.element = this.element;
+
+		this.clickCoordRect = new CoordRect();
+		this.clickCoordRect.element = this.clickRect;
+
+		this.group = svg_group([this.element, this.clickRect]);
 		this.group.setAttribute("node_id",this.id);
-		var element_array=[this.element];
-		for(var key in element_array) {
-			element_array[key].setAttribute("node_id",this.id);
+		this.element_array = [this.element];
+		for(var key in this.element_array) {
+			this.element_array[key].setAttribute("node_id",this.id);
 		}
 	}
 	updateGraphics() {
 		// Update rect to fit start and end position
-		this.coordRect.x1=this.startx;
-		this.coordRect.y1=this.starty;
-		this.coordRect.x2=this.endx;
-		this.coordRect.y2=this.endy;
+		this.coordRect.x1 = this.startx;
+		this.coordRect.y1 = this.starty;
+		this.coordRect.x2 = this.endx;
+		this.coordRect.y2 = this.endy;
 		this.coordRect.update();
+
+		this.clickCoordRect.x1 = this.startx;
+		this.clickCoordRect.y1 = this.starty;
+		this.clickCoordRect.x2 = this.endx;
+		this.clickCoordRect.y2 = this.endy;
+		this.clickCoordRect.update();
+
 	}
 }
 
-class htmlTwoPointer extends TwoPointer {
+class HtmlTwoPointer extends TwoPointer {
 	updateHTML(html) {
 		this.htmlElement.contentDiv.innerHTML = html;
 	}
@@ -1634,7 +2230,7 @@ class htmlTwoPointer extends TwoPointer {
 	}
 }
 
-class TableVisual extends htmlTwoPointer {
+class TableVisual extends HtmlTwoPointer {
 	constructor(id,type,pos) {
 		super(id,type,pos);
 		this.runHandler = () => {
@@ -1652,24 +2248,24 @@ class TableVisual extends htmlTwoPointer {
 		let namesToDisplay = IdsToDisplay.map(findID).map(getName);
 		do_global_log("names to display");
 		do_global_log(JSON.stringify(namesToDisplay));
-		let results = RunResults.getFilteredSelectiveIdResults(IdsToDisplay,this.dialog.getStart(),this.dialog.getEnd(),this.dialog.getStep());
+		let results = RunResults.getFilteredSelectiveIdResults(IdsToDisplay,this.dialog.getStart(),this.dialog.getLength(),this.dialog.getStep());
 		
 		// Make header
-		html+="<td>"+formatFunction("Time")+"</td>";
+		html += "<td>"+formatFunction("Time")+"</td>";
 		for(let i in namesToDisplay) {
-			html+="<td>"+makePrimitiveName(namesToDisplay[i])+"</td>";
+			html += `<td>${namesToDisplay[i]}</td>`;
 		}
 		// Make content
-		html+="</thead><tbody>";
+		html += "</thead><tbody>";
 		for(let row_index in results) {
-			html+="<tr>";
+			html += "<tr>";
 			for(let column_index in ["Time"].concat(namesToDisplay)) {
 				// We must get the data in column_index+1 since column 1 is reserved for time
-				html+="<td>"+stocsd_format(results[row_index][column_index],6)+"</td>";
+				html += "<td>"+stocsd_format(results[row_index][column_index],6)+"</td>";
 			}
-			html+="</tr>";
+			html += "</tr>";
 		}
-		html+="</tbody></table>";
+		html += "</tbody></table>";
 		this.updateHTML(html);
 	}
 	
@@ -1678,12 +2274,21 @@ class TableVisual extends htmlTwoPointer {
 		this.dialog.subscribePool.subscribe(()=>{
 			this.render();
 		});
-		this.element=svg_rect(this.startx,this.starty,this.endx,this.endy,"black","none","element",""); //svg_line(this.startx,this.starty,this.endx,this.endy,"black","white","element",dash);
-		this.htmlElement = svg_foreignobject(this.startx,this.starty,200,200,"table not renderd yet");
+		this.element = svg_rect(
+			this.startx,
+			this.starty,
+			this.endx,
+			this.endy,
+			defaultStroke,
+			"none",
+			"element",
+			""
+		);
+		this.htmlElement = svg_foreignobject(this.startx, this.starty, 200, 200, "table not renderd yet", "white");
 		$(this.htmlElement.innerDiv).mousedown((event) => {
 			// This is an alternative to having the htmlElement in the group
 				primitive_mousedown(this.id,event)
-				mousedown_handler(event);
+				mouseDownHandler(event);
 				event.stopPropagation();
 		});
 		
@@ -1691,25 +2296,24 @@ class TableVisual extends htmlTwoPointer {
 			this.dialog.show();
 		});
 		
-		this.coordRect=new CoordRect();
-		this.coordRect.element=this.element;
+		this.coordRect = new CoordRect();
+		this.coordRect.element = this.element;
 		
-		this.group=svg_group([this.element]);
+		this.group = svg_group([this.element]);
 		this.group.setAttribute("node_id",this.id);	
 		
-		var element_array=[this.element];
-		var element_array=[this.htmlElement.scrollDiv
-,this.element];
-		for(var key in element_array) {
-			element_array[key].setAttribute("node_id",this.id);
+		this.element_array = [this.element];
+		this.element_array = [this.htmlElement.scrollDiv, this.element];
+		for(var key in this.element_array) {
+			this.element_array[key].setAttribute("node_id",this.id);
 		}
 	}
 	updateGraphics() {
 		// Update rect to fit start and end position
-		this.coordRect.x1=this.startx;
-		this.coordRect.y1=this.starty;
-		this.coordRect.x2=this.endx;
-		this.coordRect.y2=this.endy;
+		this.coordRect.x1 = this.startx;
+		this.coordRect.y1 = this.starty;
+		this.coordRect.x2 = this.endx;
+		this.coordRect.y2 = this.endy;
 		this.coordRect.update();
 		
 		this.htmlElement.setAttribute("x",this.getMinX());
@@ -1725,7 +2329,7 @@ class TableVisual extends htmlTwoPointer {
 	}
 }
 
-class htmlOverlayTwoPointer extends TwoPointer {
+class HtmlOverlayTwoPointer extends TwoPointer {
 	constructor(id,type,pos) {		
 		super(id,type,pos);
 	}
@@ -1737,16 +2341,16 @@ class htmlOverlayTwoPointer extends TwoPointer {
 	makeGraphics() {
 		this.targetBorder = 4;
 		this.targetElement = document.createElement("div");
-		this.targetElement.style.position="absolute";
-		this.targetElement.style.backgroundColor="white";
-		this.targetElement.style.zIndex=100;
+		this.targetElement.style.position = "absolute";
+		this.targetElement.style.backgroundColor = "white";
+		this.targetElement.style.zIndex = 100;
 		this.targetElement.innerHTML = "hej";
 		document.getElementById("svgplanebackground").appendChild(this.targetElement);
 		
 		$(this.targetElement).mousedown((event) => {
 			// This is an alternative to having the htmlElement in the group
 				primitive_mousedown(this.id,event)
-				mousedown_handler(event);
+				mouseDownHandler(event);
 				event.stopPropagation();
 		});
 		
@@ -1754,36 +2358,44 @@ class htmlOverlayTwoPointer extends TwoPointer {
 			this.double_click(this.id);
 		});
 		
-		this.element=svg_rect(this.startx,this.starty,this.endx,this.endy,"black","white","element","");
+		this.element = svg_rect(this.startx,
+			this.starty,
+			this.endx,
+			this.endy, 
+			defaultStroke, 
+			"white", 
+			"element",
+			""
+		);
 
-		this.coordRect=new CoordRect();
-		this.coordRect.element=this.element;
+		this.coordRect = new CoordRect();
+		this.coordRect.element = this.element;
 		
-		this.group=svg_group([this.element]);
-		this.group.setAttribute("node_id",this.id);	
+		this.group = svg_group([this.element]);
+		this.group.setAttribute("node_id", this.id);	
 		
-		var element_array=[this.element];
-		for(var key in element_array) {
-			element_array[key].setAttribute("node_id",this.id);
+		this.element_array = [this.element];
+		for(var key in this.element_array) {
+			this.element_array[key].setAttribute("node_id", this.id);
 		}
 	}
 	
 	updateGraphics() {
 		// Update rect to fit start and end position
-		this.coordRect.x1=this.startx;
-		this.coordRect.y1=this.starty;
-		this.coordRect.x2=this.endx;
-		this.coordRect.y2=this.endy;
+		this.coordRect.x1 = this.startx;
+		this.coordRect.y1 = this.starty;
+		this.coordRect.x2 = this.endx;
+		this.coordRect.y2 = this.endy;
 		this.coordRect.update();
 		
-		let svgoffset=$("#svgplane").offset();
+		let svgoffset = $("#svgplane").offset();
 		
 		
-		this.targetElement.style.left=(this.getMinX()+this.targetBorder+1)+"px";
-		this.targetElement.style.top=(this.getMinY()+this.targetBorder+1)+"px";
+		this.targetElement.style.left = (this.getMinX()+this.targetBorder+1)+"px";
+		this.targetElement.style.top = (this.getMinY()+this.targetBorder+1)+"px";
 		
-		this.targetElement.style.width=(this.getWidth()-(2*this.targetBorder))+"px";
-		this.targetElement.style.height=(this.getHeight()-(2*this.targetBorder))+"px";
+		this.targetElement.style.width = (this.getWidth()-(2*this.targetBorder))+"px";
+		this.targetElement.style.height = (this.getHeight()-(2*this.targetBorder))+"px";
 	}
 	
 	clean() {
@@ -1792,9 +2404,9 @@ class htmlOverlayTwoPointer extends TwoPointer {
 	}
 }
 
-class DiagramVisual extends htmlOverlayTwoPointer {
-	constructor(id,type,pos) {		
-		super(id,type,pos);
+class DiagramVisual extends HtmlOverlayTwoPointer {
+	constructor(id, type, pos) {		
+		super(id, type, pos);
 		this.runHandler = () => {
 			this.render();
 		}
@@ -1811,11 +2423,27 @@ class DiagramVisual extends htmlOverlayTwoPointer {
 	render() {
 		
 		let IdsToDisplay = this.dialog.getIdsToDisplay();
-		this.primitive.value.setAttribute("Primitives",IdsToDisplay.join(","));
+		this.primitive.value.setAttribute("Primitives", IdsToDisplay.join(","));
 		this.namesToDisplay = IdsToDisplay.map(findID).map(getName);
+		this.colorsToDisplay = IdsToDisplay.map(findID).map(
+			node => node.getAttribute('color') ? node.getAttribute('color') : defaultStroke 
+		);
+		this.patternsToDisplay = IdsToDisplay.map(findID).map(
+			node => {
+				let type = get_object(node.id).type;
+				if (type == "variable" || type == "converter") {
+					return ".";
+				} else if (type == "flow") {
+					return "-";
+				} else {
+					return "_";
+				}
+			}
+		);
+
 		//~ alert("names to display "+this.namesToDisplay+" IdsToDisplay "+IdsToDisplay);
 		var results = RunResults.getSelectiveIdResults(IdsToDisplay);
-		if(results.length==0) {
+		if (results.length == 0) {
 			// We can't render anything with no data
 			
 			return;
@@ -1829,10 +2457,10 @@ class DiagramVisual extends htmlOverlayTwoPointer {
 			for(let row of results) {
 				let time = Number(row[0])
 				let value = Number(row[resultColumn])
-				if(value < this.minValue) {
+				if (value < this.minValue) {
 					this.minValue = value;
 				}
-				if(value > this.maxValue) {
+				if (value > this.maxValue) {
 					this.maxValue = value;
 				}
 				serie.push([time,value]);
@@ -1847,7 +2475,7 @@ class DiagramVisual extends htmlOverlayTwoPointer {
 		this.serieArray = [];
 		
 		// Make time series
-		for(let i=1;i<=IdsToDisplay.length;i++) {
+		for(let i = 1; i <= IdsToDisplay.length; i++) {
 			this.serieArray.push(makeSerie(i));
 		}
 		do_global_log("serieArray "+JSON.stringify(this.serieArray));
@@ -1860,7 +2488,15 @@ class DiagramVisual extends htmlOverlayTwoPointer {
 		
 		// Make serie settings
 		for(let i in this.namesToDisplay) {
-			this.serieSettingsArray.push({label: makePrimitiveName(this.namesToDisplay[i]), showMarker:false});
+			this.serieSettingsArray.push(
+				{
+					label: this.namesToDisplay[i], 
+					color: this.colorsToDisplay[i],
+					linePattern: this.patternsToDisplay[i],
+					shadow: false,
+					showMarker:false
+				}
+			);
 		}
 		
 		do_global_log(JSON.stringify(this.serieSettingsArray));
@@ -1872,12 +2508,12 @@ class DiagramVisual extends htmlOverlayTwoPointer {
 		
 	}
 	updateChart() {
-		if(this.serieArray==null) {
+		if (this.serieArray == null) {
 			// The series are not initialized yet
 			this.chartDiv.innerHTML = "No data. Run to create data!";
 			return;
 		}
-		if(this.serieArray.length == 0) {
+		if (this.serieArray.length == 0) {
 			// We have no series to display
 			this.chartDiv.innerHTML = "At least one primitive must be selected!";
 			return;
@@ -1915,10 +2551,10 @@ class DiagramVisual extends htmlOverlayTwoPointer {
 	updateGraphics() {
 		super.updateGraphics();
 		
-		let width=$(this.targetElement).width()-20;
-		let height=$(this.targetElement).height()-20;
-		this.chartDiv.style.width=width+"px";
-		this.chartDiv.style.height=height+"px";
+		let width = $(this.targetElement).width()-20;
+		let height = $(this.targetElement).height()-20;
+		this.chartDiv.style.width = width+"px";
+		this.chartDiv.style.height = height+"px";
 		
 		this.updateChart();
 	}
@@ -1927,7 +2563,7 @@ class DiagramVisual extends htmlOverlayTwoPointer {
 	}
 }
 
-class TextAreaVisual extends htmlOverlayTwoPointer {
+class TextAreaVisual extends HtmlOverlayTwoPointer {
 	constructor(id,type,pos) {		
 		super(id,type,pos);
 		
@@ -1971,6 +2607,8 @@ class XyPlotVisual extends DiagramVisual {
 		this.serieArray = null;
 		this.namesToDisplay = [];
 		
+		this.markers = false;
+
 		this.minXValue = 0;
 		this.maxXValue = 0;
 		
@@ -1984,11 +2622,13 @@ class XyPlotVisual extends DiagramVisual {
 	}
 	render() {		
 		let IdsToDisplay = this.dialog.getIdsToDisplay();
+		this.showMarkers = this.dialog.isMarkersChecked();
+		this.showLine = this.dialog.isLineChecked();
 		this.primitive.value.setAttribute("Primitives",IdsToDisplay.join(","));
 		this.namesToDisplay = IdsToDisplay.map(findID).map(getName);
 		//~ alert("names to display "+this.namesToDisplay+" IdsToDisplay "+IdsToDisplay);
 		var results = RunResults.getSelectiveIdResults(IdsToDisplay);
-		if(results.length==0) {
+		if (results.length == 0) {
 			// We can't render anything with no data
 			
 			return;
@@ -2000,10 +2640,10 @@ class XyPlotVisual extends DiagramVisual {
 		this.minYValue = 0;
 		this.maxYValue = 0;
 		
-		this.serieXName="X series";
-		this.serieYName="Y series";
+		this.serieXName = "X series";
+		this.serieYName = "Y series";
 		
-		if(IdsToDisplay.length != 2) {
+		if (IdsToDisplay.length != 2) {
 			// We have no series to display
 			this.chartDiv.innerHTML = "Exactly two primitives must be selected!";
 			return;
@@ -2011,22 +2651,22 @@ class XyPlotVisual extends DiagramVisual {
 		
 		let makeXYSerie = () => {
 			let serie = [];
-			this.serieXName = makePrimitiveName(this.namesToDisplay[0]);
-			this.serieYName = makePrimitiveName(this.namesToDisplay[1]);
+			this.serieXName = this.namesToDisplay[0];
+			this.serieYName = this.namesToDisplay[1];
 			
 			for(let row of results) {
 				let x = Number(row[1])
 				let y = Number(row[2])
-				if(x < this.minXValue) {
+				if (x < this.minXValue) {
 					this.minXValue = x;
 				}
-				if(x > this.maxXValue) {
+				if (x > this.maxXValue) {
 					this.maxXValue = x;
 				}
-				if(y < this.minValue) {
+				if (y < this.minValue) {
 					this.minYValue = y;
 				}
-				if(y > this.maxYValue) {
+				if (y > this.maxYValue) {
 					this.maxYValue = y;
 				}
 				serie.push([x,y]);
@@ -2053,7 +2693,15 @@ class XyPlotVisual extends DiagramVisual {
 		
 		// Make serie settings
 		for(let i in this.namesToDisplay) {
-			this.serieSettingsArray.push({label: this.namesToDisplay[i], showMarker:false});
+			this.serieSettingsArray.push(
+				{
+					label: this.namesToDisplay[i], 
+					color: "black",
+					shadow: false,
+					showLine: this.showLine,
+					showMarker: this.showMarkers  
+				}
+			);
 		}
 		
 		do_global_log(JSON.stringify(this.serieSettingsArray));
@@ -2065,17 +2713,12 @@ class XyPlotVisual extends DiagramVisual {
 	}
 	
 	updateChart() {
-		if(this.serieArray==null) {
+		if (this.serieArray == null) {
 			// The series are not initialized yet
 			this.chartDiv.innerHTML = "No data. Run to create data!";
 			return;
 		}
 		$(this.chartDiv).empty();
-		
-		this.serieSettingsArray = this.serieSettingsArray.map(function(settingsIn) {
-			settingsIn.showMarker = true;
-			return settingsIn;
-		});
 		
 		  this.plot = $.jqplot(this.chartId, this.serieArray, {  
 			  series: this.serieSettingsArray,
@@ -2101,15 +2744,16 @@ class XyPlotVisual extends DiagramVisual {
 
 class LineVisual extends TwoPointer {
 	makeGraphics() {
-		var dash="";
-		this.element=svg_line(this.startx,this.starty,this.endx,this.endy,"black","white","element",dash);
-		this.coordRect=new CoordRect();
-		this.coordRect.element=this.element;
-		this.group=svg_group([this.element]);
+		this.element = svg_line(this.startx,this.starty,this.endx,this.endy, defaultStroke, defaultFill , "element");
+		this.clickLine = svg_line(this.startx, this.starty, this.endx, this.endy, "transparent", "none" , "element");
+		this.clickLine.setAttribute("stroke-width", "10");
+		this.coordRect = new CoordRect();
+		this.coordRect.element = this.element;
+		this.group = svg_group([this.element, this.clickLine]);
 		this.group.setAttribute("node_id",this.id);
-		var element_array=[this.element];
-		for(var key in element_array) {
-			element_array[key].setAttribute("node_id",this.id);
+		this.element_array = [this.element];
+		for(var key in this.element_array) {
+			this.element_array[key].setAttribute("node_id",this.id);
 		}
 	}
 	updateGraphics() {
@@ -2117,23 +2761,28 @@ class LineVisual extends TwoPointer {
 		this.element.setAttribute("y1",this.starty);
 		this.element.setAttribute("x2",this.endx);
 		this.element.setAttribute("y2",this.endy);
+		this.clickLine.setAttribute("x1", this.startx);
+		this.clickLine.setAttribute("y1", this.starty);
+		this.clickLine.setAttribute("x2", this.endx);
+		this.clickLine.setAttribute("y2", this.endy);
 	}
 }
-class LinkVisual extends BaseConnection{
-	constructor(id,type,pos) {
-		super(id,type,pos);
+
+class LinkVisual extends BaseConnection {
+	constructor(id, type, pos) {
+		super(id, type, pos);
 	}
 	unselect() {
-		this.selected=false;
-		if(hasSelectedChildren(this.id)) {
+		this.selected = false;
+		if (hasSelectedChildren(this.id)) {
 			for(var i in this.highlight_on_select) {
-				this.highlight_on_select[i].setAttribute("stroke","black");
+				this.highlight_on_select[i].setAttribute("stroke", "black");
 			}	
 		} else {
 			let children = getChildren(this.id);
 			for(let id in children) {
 				let object = get_object(id);
-				if('setVisible' in object) {
+				if ('setVisible' in object) {
 					object.setVisible(false);
 				}
 			}
@@ -2141,22 +2790,22 @@ class LinkVisual extends BaseConnection{
 		
 		// Hide beizer lines
 		for(let element of this.showOnlyOnSelect) {
-			element.setAttribute("visibility","hidden");
+			element.setAttribute("visibility", "hidden");
 		}
 	}
-	select(selectChildren=true) {		
+	select(selectChildren = true) {		
 		let children = getChildren(this.id);
 		for(let id in children) {
 			let object = get_object(id);
-			if('setVisible' in object) {
+			if ('setVisible' in object) {
 				object.setVisible(true);
 			}
 		}
 		for(var i in this.highlight_on_select) {
-			this.highlight_on_select[i].setAttribute("stroke","red");
+			this.highlight_on_select[i].setAttribute("stroke", "red");
 		}
 		
-		if(selectChildren) {
+		if (selectChildren) {
 			// This for loop is partly redundant and should be integrated in later code
 			for(var anchor of get_anchors(this.id)) {
 				anchor.select();
@@ -2166,49 +2815,86 @@ class LinkVisual extends BaseConnection{
 		
 		// Show beizer lines
 		for(let element of this.showOnlyOnSelect) {
-			element.setAttribute("visibility","visible");
+			element.setAttribute("visibility", "visible");
 		}
 	}
 	updateClickArea() {
-		this.click_area.x1=this.curve.x1;
-		this.click_area.y1=this.curve.y1;
-		this.click_area.x2=this.curve.x2;
-		this.click_area.y2=this.curve.y2;
-		this.click_area.x3=this.curve.x3;
-		this.click_area.y3=this.curve.y3;
-		this.click_area.x4=this.curve.x4;
-		this.click_area.y4=this.curve.y4;
+		this.click_area.x1 = this.curve.x1;
+		this.click_area.y1 = this.curve.y1;
+		this.click_area.x2 = this.curve.x2;
+		this.click_area.y2 = this.curve.y2;
+		this.click_area.x3 = this.curve.x3;
+		this.click_area.y3 = this.curve.y3;
+		this.click_area.x4 = this.curve.x4;
+		this.click_area.y4 = this.curve.y4;
 		this.click_area.update();
 	}
+	setEndAttach(new_end_attach) {
+		super.setEndAttach(new_end_attach);
+		if(new_end_attach != null && new_end_attach.getType() == "stock") {
+			this.dashLine();
+		} else {
+			this.undashLine();
+		}
+	}
+
+	setColor(color) {
+		this.color = color;
+		this.primitive.setAttribute("color", this.color);
+		this.curve.setAttribute("stroke", color);
+		this.arrowPath.setAttribute("stroke", color);
+		this.arrowPath.setAttribute("fill", color);
+		this.start_anchor.setColor(color);
+		this.end_anchor.setColor(color);
+		this.b1_anchor.setColor(color);
+		this.b2_anchor.setColor(color);
+		this.b1_line.setAttribute("stroke", color);
+		this.b2_line.setAttribute("stroke", color);
+	}
+
 	makeGraphics() {
-		const headHalfWidth=2;
-		this.arrowPath=svg_from_string(`<path d="M0,0 -${headHalfWidth},7 ${headHalfWidth},7 Z" stroke="black" fill="black"/>`);
-		this.arrowhead=svg_group([this.arrowPath]);
-		svg_translate(this.arrowhead,this.endx,this.endy);
-		this.click_area = svg_curve(this.startx,this.starty,this.startx,this.starty,this.startx,this.starty,this.startx,this.starty,{"pointer-events":"all","stroke":"none","stroke-width":"10"}); 
-		this.curve = svg_curve(this.startx,this.starty,this.startx,this.starty,this.startx,this.starty,this.startx,this.starty,{"stroke":"black","stroke-width":"1"});
+		const headHalfWidth = 2;
+		this.arrowPath = svg_from_string(`<path d="M0,0 -${headHalfWidth},7 ${headHalfWidth},7 Z" stroke="black" fill="black"/>`);
+		this.arrowHead = svg_group([this.arrowPath]);
+		svg_translate(this.arrowHead,this.endx,this.endy);
+		this.click_area = svg_curve(this.startx,this.starty,this.startx,this.starty,this.startx,this.starty,this.startx,this.starty,{"pointer-events":"all", "stroke":"none", "stroke-width":"10"}); 
+		this.curve = svg_curve(this.startx,this.starty,this.startx,this.starty,this.startx,this.starty,this.startx,this.starty,{"stroke":"black", "stroke-width":"1"});
 
 		this.click_area.draggable = false;
 		this.curve.draggable = false;
 		
-		this.group=svg_group([this.click_area,this.curve,this.arrowhead]);
+		this.group = svg_group([this.click_area,this.curve,this.arrowHead]);
 		this.group.setAttribute("node_id",this.id);
 		
-		this.b1_anchor = new AnchorPoint(this.id+".b1_anchor","dummy_anchor",[this.startx,this.starty],anchorTypeEnum.bezier1);
-		
-		this.b2_anchor = new AnchorPoint(this.id+".b2_anchor","dummy_anchor",[this.startx,this.starty],anchorTypeEnum.bezier2);
+		this.b1_anchor = new AnchorPoint(this.id+".b1_anchor", "dummy_anchor",[this.startx,this.starty],anchorTypeEnum.bezier1);
+		this.b1_anchor.makeSquare();
+		this.b2_anchor = new AnchorPoint(this.id+".b2_anchor", "dummy_anchor",[this.startx,this.starty],anchorTypeEnum.bezier2);
+		this.b2_anchor.makeSquare();
 
-
-		this.b1_line = svg_line(this.startx,this.starty,this.startx,this.starty,"black","black","","1,5");
-		this.b2_line = svg_line(this.startx,this.starty,this.startx,this.starty,"black","black","","1,5");
+		this.b1_line = svg_line(this.startx, this.starty, this.startx, this.starty, "black", "black", "", "5,5");
+		this.b2_line = svg_line(this.startx, this.starty, this.startx, this.starty, "black", "black", "", "5,5");
 		
 		this.showOnlyOnSelect = [this.b1_line,this.b2_line];
 		
-		this.element_array=this.element_array.concat([this.b1_line,this.b2_line]);
+		this.element_array = this.element_array.concat([this.b1_line,this.b2_line]);
+	}
+	dashLine() {
+		this.curve.setAttribute("stroke-dasharray", "4 4");
+	}
+	undashLine() {
+		this.curve.setAttribute("stroke-dasharray", "");
 	}
 	resetBezierPoints() {
+		let obj1 = this.getStartAttach();
+		let obj2 = this.getEndAttach();
+		if ( ! obj1 || ! obj2 ) {
+			return;
+		}
+		this.start_anchor.set_pos(obj1.getLinkMountPos(obj2.get_pos()));
+		this.end_anchor.set_pos(obj2.getLinkMountPos(obj1.get_pos()));
 		this.resetBezier1();
 		this.resetBezier2();
+		this.update();
 	}
 	resetBezier1() {
 		this.b1_anchor.set_pos(this.linearInterpolation((1/3)));
@@ -2226,21 +2912,21 @@ class LinkVisual extends BaseConnection{
 		
 		switch(anchorType) {
 		case anchorTypeEnum.start:
-			this.curve.x1=startpos[0];
-			this.curve.y1=startpos[1];
+			this.curve.x1 = startpos[0];
+			this.curve.y1 = startpos[1];
 			this.curve.update();
 			
-			this.b1_line.setAttribute("x1",startpos[0]);
-			this.b1_line.setAttribute("y1",startpos[1]);
+			this.b1_line.setAttribute("x1", startpos[0]);
+			this.b1_line.setAttribute("y1", startpos[1]);
 		break;
 		case anchorTypeEnum.end:
-			this.curve.x4=endpos[0];
-			this.curve.y4=endpos[1];
+			this.curve.x4 = endpos[0];
+			this.curve.y4 = endpos[1];
 			this.curve.update();
 			
 			
-			this.b2_line.setAttribute("x1",endpos[0]);
-			this.b2_line.setAttribute("y1",endpos[1]);
+			this.b2_line.setAttribute("x1", endpos[0]);
+			this.b2_line.setAttribute("y1", endpos[1]);
 		break;
 		case anchorTypeEnum.bezier1:
 		{
@@ -2276,14 +2962,14 @@ class LinkVisual extends BaseConnection{
 		// The arrow is pointed from the second bezier point to the end
 		let b2pos = this.b2_anchor.get_pos();
 		
-		let xdiff=this.endx-b2pos[0];
-		let ydiff=this.endy-b2pos[1];
-		let angle=Math.atan2(xdiff,-ydiff)*(180/Math.PI);
-		svg_transform(this.arrowhead,this.endx,this.endy,angle,1);
+		let xdiff = this.endx-b2pos[0];
+		let ydiff = this.endy-b2pos[1];
+		let angle = Math.atan2(xdiff,-ydiff)*(180/Math.PI);
+		svg_transform(this.arrowHead,this.endx,this.endy,angle,1);
 		
 		// Update end position so that we get the drawing effect when link is created
-		this.curve.x4=this.endx;
-		this.curve.y4=this.endy;
+		this.curve.x4 = this.endx;
+		this.curve.y4 = this.endy;
 		this.curve.update();
 	}
 	finishCreate() {
@@ -2292,62 +2978,102 @@ class LinkVisual extends BaseConnection{
 		this.afterAnchorUpdate(anchorTypeEnum.bezier1);
 		this.afterAnchorUpdate(anchorTypeEnum.bezier2);	
 	}
+	update() {
+		// This function is similar to TwoPointer::update but it takes attachments into account
+		
+		// Get start position from attach
+		// _start_anchor is null if we are currently creating the connection
+		// _start_attach is null if we are not attached to anything
+		
+		//let connectionCenter = this.b1_anchor.get_pos();
+
+		if (this.getStartAttach() != null && this.start_anchor != null) {
+			if (this.getStartAttach().get_pos) {
+				let oldPos = this.start_anchor.get_pos();
+				let newPos = this.getStartAttach().getLinkMountPos(this.b1_anchor.get_pos());
+				// If start point have moved reset b1
+				if (oldPos[0] != newPos[0] || oldPos[1] != newPos[1]) {
+					this.start_anchor.set_pos(newPos);
+				}
+			}
+		}
+		if (this.getEndAttach() != null && this.end_anchor != null) {
+			if (this.getEndAttach().get_pos) {
+				let oldPos = this.end_anchor.get_pos();
+				let newPos = this.getEndAttach().getLinkMountPos(this.b2_anchor.get_pos());
+				// If end point have moved reset b2
+				if (oldPos[0] != newPos[0] || oldPos[1] != newPos[1]) {
+					this.end_anchor.set_pos(newPos);
+				}
+			}
+		}
+		super.update();
+	}
 }
 
-class baseTool {
+class BaseTool {
 	static init() {
 		
 	}
-	static mouse_down(x,y) {
+	static leftMouseDown(x,y) {
+		// Is triggered when mouse goes down for this tool
 	}
-	static mouse_move(x,y) {
+	static mouseMove(x,y) {
+		// Is triggered when mouse moves
 	}
-	static mouse_up(x,y) {
+	static leftMouseUp(x,y) {
+		// Is triggered when mouse goes up for this tool
 	}
-	static enter_tool() {
-		
+	static rightMouseDown(x,y) {
+		// Is triggered when right mouse is clicked for this tool 
 	}
-	static leave_tool() {
+	static enterTool() {
+		// Is triggered when the tool is selected
+	}
+	static leaveTool() {
+		// Is triggered when the tool is deselected
 	}
 }
-class RunTool extends baseTool {
-	static enter_tool() {
+class RunTool extends BaseTool {
+	static enterTool() {
 		RunResults.runPauseSimulation();
 		ToolBox.setTool("mouse");
 	}
 }
 
-class StepTool extends baseTool {
-	static enter_tool() {
+class StepTool extends BaseTool {
+	static enterTool() {
 		RunResults.stepSimulation();
 		ToolBox.setTool("mouse");
 	}
 }
 
-class ResetTool extends baseTool {
-	static enter_tool() {
+class ResetTool extends BaseTool {
+	static enterTool() {
 		RunResults.resetSimulation();
 		ToolBox.setTool("mouse");
 	}
 }
 
-class TextTool extends baseTool {
-	static mouse_down(x,y) {
+class TextTool extends BaseTool {
+	static leftMouseDown(x,y) {
 		unselect_all();
 		// The right place to  create primitives and elements is in the tools-layers
 		var primitive_name = findFreeName(type_basename["text"]);
 		var size = type_size["text"];
 		var new_text = createPrimitive(primitive_name, "Text", [x-size[0]/2, y-size[1]/2], size);
+	}
+	static leftMouseUp(x, y) {
 		ToolBox.setTool("mouse");
 	}
 }
 
-class NumberboxTool extends baseTool {
+class NumberboxTool extends BaseTool {
 	static init() {
-		this.targetPrimitive=null;
-		this.numberboxable_primitives=["stock","variable","converter","flow"];
+		this.targetPrimitive = null;
+		this.numberboxable_primitives = ["stock", "variable", "converter", "flow"];
 	}
-	static mouse_down(x,y) {
+	static leftMouseDown(x,y) {
 		unselect_all();
 		// The right place to  create primitives and elements is in the tools-layers
 		var primitive_name = findFreeName(type_basename["text"]);
@@ -2356,32 +3082,33 @@ class NumberboxTool extends baseTool {
 		//~ var new_text = createPrimitive(primitive_name, "Text", [x-size[0]/2, y-size[1]/2], size);
 		this.primitive = createPrimitive(name, "Numberbox", [x,y],[0,0]);
 		this.primitive.setAttribute("Target",this.targetPrimitive);
-		
+	}
+	static leftMouseUp(x, y) {
 		ToolBox.setTool("mouse");
 	}
-	static enter_tool() {
-		var selected_ids=Object.keys(get_selected_root_objects());
-		if(selected_ids.length!=1) {
+	static enterTool() {
+		var selected_ids = Object.keys(get_selected_root_objects());
+		if (selected_ids.length != 1) {
 			xAlert("You must first select exactly one primitive to watch");
 			ToolBox.setTool("mouse");
 			return;
 		}
 		
-		var selected_object=get_object(selected_ids[0]);
-		if(this.numberboxable_primitives.indexOf(selected_object.type)==-1) {
+		var selected_object = get_object(selected_ids[0]);
+		if (this.numberboxable_primitives.indexOf(selected_object.type) == -1) {
 			xAlert("This primitive is not watchable");
 			ToolBox.setTool("mouse");
 			return;
 		}
-		this.targetPrimitive=selected_ids[0];
+		this.targetPrimitive = selected_ids[0];
 	}
 }
 NumberboxTool.init();
 
-class DeleteTool extends baseTool {
-	static enter_tool() {
-		var selected_ids=Object.keys(get_selected_root_objects());
-		if(selected_ids.length==0) {
+class DeleteTool extends BaseTool {
+	static enterTool() {
+		var selected_ids = Object.keys(get_selected_root_objects());
+		if (selected_ids.length == 0) {
 			xAlert("You must select at least one primitive to delete");
 			ToolBox.setTool("mouse");
 			return;
@@ -2393,169 +3120,224 @@ class DeleteTool extends baseTool {
 }
 DeleteTool.init();
 
-class UndoTool extends baseTool {
-	static enter_tool() {
+class UndoTool extends BaseTool {
+	static enterTool() {
 		History.doUndo();
 		ToolBox.setTool("mouse");
 	}
 }
 UndoTool.init();
 
-class RedoTool extends baseTool {
-	static enter_tool() {
+class RedoTool extends BaseTool {
+	static enterTool() {
 		History.doRedo();
 		ToolBox.setTool("mouse");
 	}
 }
 RedoTool.init();
 
-class StockTool extends baseTool {
-	static mouse_down(x,y) {
+class StockTool extends BaseTool {
+	static leftMouseDown(x,y) {
 		unselect_all();
 		// The right place to  create primitives and elements is in the tools-layers
 		var primitive_name = findFreeName(type_basename["stock"]);
 		var size = type_size["stock"];
 		var new_stock = createPrimitive(primitive_name, "Stock", [x-size[0]/2, y-size[1]/2], size);
+	}
+	static leftMouseUp(x, y) {
 		ToolBox.setTool("mouse");
 	}
 }
 
-class RotateNameTool extends baseTool {
-	static enter_tool() {
+class RotateNameTool extends BaseTool {
+	static enterTool() {
 		var object_array = get_selected_objects();
 		for(var node_id in object_array) {
 			rotate_name(node_id);
 		}
 		ToolBox.setTool("mouse");
 	}
-	static leave_tool() {
+	static leaveTool() {
 		History.storeUndoState();
 	}
 }
 
-class GhostTool extends baseTool {
-	static init() {
-		this.id_to_ghost=null;
-		this.ghostable_primitives=["stock","variable","converter"];
+class MoveValveTool extends BaseTool {
+	static enterTool() {
+		var object_array = get_selected_objects();
+		for (var node_id in object_array) {
+			let obj = get_object(node_id);
+			if (obj.type == "flow") {
+				obj.moveValve();
+			}
+		}
+		ToolBox.setTool("mouse");
 	}
-	static mouse_down(x,y) {
+}
+
+class StraightenLinkTool extends BaseTool {
+	static enterTool() {
+		for (let node_id in get_selected_objects()) {
+			let key = get_parent_id(node_id);
+			let obj = get_object(key);
+			if (obj.type == "link") {
+				obj.resetBezierPoints();
+			}
+		}
+		ToolBox.setTool("mouse");
+	}
+		
+}
+
+class GhostTool extends BaseTool {
+	static init() {
+		this.id_to_ghost = null;
+		this.ghostable_primitives = ["stock", "variable", "converter"];
+	}
+	static leftMouseDown(x,y) {
 		unselect_all();
 		var source = findID(this.id_to_ghost);
-		var ghost=makeGhost(source,[x,y]);
-		ghost.setAttribute("RotateName","0");
+		var ghost = makeGhost(source,[x,y]);
+		ghost.setAttribute("RotateName", "0");
 		syncVisual(ghost);
 		var DIM_ghost = get_object(ghost.getAttribute("id"));
 		source.subscribeAttribute(DIM_ghost.changeAttributeHandler);
+	}
+	static leftMouseUp(x, y) {
 		ToolBox.setTool("mouse");
 	}
-	static enter_tool() {
-		var selected_ids=get_selected_ids();
-		if(selected_ids.length!=1) {
+	static enterTool() {
+		var selected_ids = get_selected_ids();
+		if (selected_ids.length != 1) {
 			errorPopUp("You must first select exactly one primitive to ghost");
 			ToolBox.setTool("mouse");
 			return;
 		}
-		var selected_object=get_object(selected_ids[0]);
-		if(selected_object.is_ghost) {
+		var selected_object = get_object(selected_ids[0]);
+		if (selected_object.is_ghost) {
 			errorPopUp("You cannot ghost a ghost");
 			ToolBox.setTool("mouse");
 			return;
 		}
-		if(this.ghostable_primitives.indexOf(selected_object.type)==-1) {
+		if (this.ghostable_primitives.indexOf(selected_object.type) == -1) {
 			errorPopUp("This primitive is not ghostable");
 			ToolBox.setTool("mouse");
 			return;
 		}
-		this.id_to_ghost=selected_ids[0];
+		this.id_to_ghost = selected_ids[0];
 	}
 }
 GhostTool.init();
 
-class ConverterTool extends baseTool {
-	static mouse_down(x,y) {
+class ConverterTool extends BaseTool {
+	static leftMouseDown(x,y) {
 		unselect_all();
 		// The right place to  create primitives and elements is in the tools-layers
 		var primitive_name = findFreeName(type_basename["converter"]);
 		var size = type_size["converter"];
 		var new_converter = createPrimitive(primitive_name, "Converter", [x-size[0]/2, y-size[1]/2], size);
+	}
+	static leftMouseUp(x, y) {
 		ToolBox.setTool("mouse");
 	}
 }
 
-class VariableTool extends baseTool {
-	static mouse_down(x,y) {
+class VariableTool extends BaseTool {
+	static leftMouseDown(x,y) {
 		unselect_all();
 		// The right place to  create primitives and elements is in the tools-layers
 		var primitive_name = findFreeName(type_basename["variable"]);
 		var size = type_size["variable"];
-		var new_stock = createPrimitive(primitive_name, "Variable", [x-size[0]/2, y-size[1]/2], size);
+		var newVariable = createPrimitive(
+			primitive_name, 
+			"Variable", 
+			[x-size[0]/2, y-size[1]/2], 
+			size,
+			{"isConstant": false}
+		);
+	}
+	static leftMouseUp(x, y) {
 		ToolBox.setTool("mouse");
 	}
 }
 
-class MouseTool extends baseTool {
+class ConstantTool extends BaseTool {
+	static leftMouseDown(x, y) {
+		unselect_all();
+		let primitiveName = findFreeName(type_basename["constant"]);
+		let size = type_size["variable"];
+		let newConstant = createPrimitive(
+			primitiveName, 
+			"Variable", 
+			[x-size[0]/2, y-size[1]/2], 
+			size, 
+			{"isConstant": true}
+		);
+	}
+	static leftMouseUp(x, y) {
+		ToolBox.setTool("mouse");
+	}
+}
+
+class MouseTool extends BaseTool {
 	static get_single_selected_anchor() {
 		// Check if we selected only 1 anchor element. Return that anchor else return null
 		
 		let selectedAnchors = [];
-		let selectedObjects=get_selected_objects();
+		let selectedObjects = get_selected_objects();
 	
 		// Get the selected anchors
 		for(var i in selectedObjects) {
-			if(selectedObjects[i].type=="dummy_anchor") {
+			if (selectedObjects[i].type == "dummy_anchor") {
 				selectedAnchors.push(selectedObjects[i]);
 			}
 		}
 		
 		// If the number of selected anchors is exactly 1 return it
-		if(selectedAnchors.length==1) {
+		if (selectedAnchors.length == 1) {
 			return selectedAnchors[0];
 		} else {
 			// More then one or no anchor selected
 			return null;
 		}
 	}
-	static mouse_down(x,y) {
-		mousedown_x=x;
-		mousedown_y=y;
+	static leftMouseDown(x,y) {
+		mousedown_x = x;
+		mousedown_y = y;
 		do_global_log("last_click_object_clicked "+last_click_object_clicked);
-		if(!last_click_object_clicked) {
+		if (!last_click_object_clicked) {
 			empty_click();
 		}
-		
-
-		
 		// Check if we selected only 1 anchor element and in that case detach it;
-		let selectedAnchor=this.get_single_selected_anchor();
-		if(selectedAnchor) {
+		let selectedAnchor = this.get_single_selected_anchor();
+		if (selectedAnchor && get_parent(selectedAnchor).getStartAttach) {
 			let parentObject = get_parent(selectedAnchor);
 			switch(selectedAnchor.getAnchorType()) {
 			case anchorTypeEnum.start:
-				parentObject.start_attach=null;
+				parentObject.setStartAttach(null);
 				break;
 			case anchorTypeEnum.end:
-				parentObject.end_attach=null;
+				parentObject.setEndAttach(null);
 				break;
 			}
 		}
 			
-			
 		// Reset it for use next time
 		last_click_object_clicked = false;
 	}
-	static mouse_move(x,y) {
-		var diff_x=x-mousedown_x;
-		var diff_y=y-mousedown_y;
-		mousedown_x=x;
-		mousedown_y=y;
+	static mouseMove(x,y) {
+		var diff_x = x-mousedown_x;
+		var diff_y = y-mousedown_y;
+		mousedown_x = x;
+		mousedown_y = y;
 		
-		if(empty_click_down) {				
-			rectselector.x2=mousedown_x;
-			rectselector.y2=mousedown_y;
+		if (empty_click_down) {				
+			rectselector.x2 = mousedown_x;
+			rectselector.y2 = mousedown_y;
 			rectselector.setVisible(true);
 			rectselector.update();
 			unselect_all();
-			var select_array=get_objects_in_rectselect();
+			var select_array = get_objects_in_rectselect();
 			for(var key in select_array) {
 				let parent = get_parent(select_array[key]);
 				parent.select(false); // We also select the parent but not all of its anchors
@@ -2565,47 +3347,46 @@ class MouseTool extends baseTool {
 		}
 		// We only come here if some object is being dragged
 		// Otherwise we will trigger empty_click_down
-		var move_array=get_selected_objects();
+		var move_array = get_selected_objects();
 		
 		var objectMoved = false;
 		for(var key in move_array) {
-			if(move_array[key].draggable==undefined) {
+			if (move_array[key].draggable == undefined) {
 				
 				//~ console.error("Drag and drop for connections not implemented yet");
 				continue;
 			}
-			if(move_array[key].draggable==false) {
+			if (move_array[key].draggable == false) {
 				do_global_log("skipping because of no draggable");
 				continue;
 			}
 			
 			// We can't drug and drop attached anchors
-			if(move_array[key].type=="dummy_anchor") {
-				if(move_array[key].isAttached()) {
+			if (move_array[key].type == "dummy_anchor") {
+				if (move_array[key].isAttached()) {
 					continue;
 				}
 			}
 			
 			
-			objectMoved=true;
+			objectMoved = true;
 			// This code is not very optimised. If we want to optimise it we should just find the objects that needs to be updated recursivly
 			rel_move(key,diff_x,diff_y);
 			
 		}
-		if(objectMoved) {
+		if (objectMoved) {
 			update_all_objects();
 		}
 	}
-	static mouse_up(x,y) {
+	static leftMouseUp(x,y) {
 		// Check if we selected only 1 anchor element and in that case detach it;
-		let selectedAnchor=this.get_single_selected_anchor();
-		if(selectedAnchor) {
-			let parentObject = get_parent(selectedAnchor);
+		let selectedAnchor = this.get_single_selected_anchor();
+		if (selectedAnchor) {
 			attach_selected_anchor(selectedAnchor);
 		}
-		if(empty_click_down) {
+		if (empty_click_down) {
 			rectselector.setVisible(false);
-			var select_array=get_objects_in_rectselect();
+			var select_array = get_objects_in_rectselect();
 			for(var key in select_array) {
 				select_array[key].select();
 			}
@@ -2614,55 +3395,69 @@ class MouseTool extends baseTool {
 	}
 }
 
-class TwoPointer_tool extends baseTool {
+class TwoPointerTool extends BaseTool {
 	static init() {
-		this.primitive=null;
-		this.current_connection=null;
-		this.type="flow";
+		this.primitive = null; // The primitive in Insight Maker engine we are creating
+		this.current_connection = null; // The visual we are working on right now
+		this.type = "flow";
 	}
 	static set_type() {
 		
 	}
-	static get_type() {
+	static getType() {
 		return "none";
 	}
-	static create_TwoPointer_start(x,y,name) {
+	static create_TwoPointer_start(x, y, name) {
 		// Override this and do a for example: 
 		// Example: this.primitive = createConnector(name, "Flow", null,null);
-		// Example: this.current_connection=new FlowVisual(this.primitive.id,this.get_type(),[x,y]);
+		// Example: this.current_connection = new FlowVisual(this.primitive.id,this.getType(),[x,y]);
 	}
 	static create_TwoPointer_end() {
 		// Override this
 	}
-	static mouse_down(x,y) {
+	static leftMouseDown(x,y) {
 		unselect_all();
-		var start_element=find_element_under(x,y);
-		var primitive_name = findFreeName(type_basename[this.get_type()]);
+
+		// Looks for element under mouse. 
+		var start_element = find_element_under(x,y);
+
+		// Finds free name for primitive. e.g. "stock1", "stock2", "variable1" etc. (Visible to the user)
+		var primitive_name = findFreeName(type_basename[this.getType()]);
 		this.create_TwoPointer_start(x,y,primitive_name);
+
+		// subscribes to changes in insight makers x and y positions. (these valus are then saved)
 		this.primitive.subscribePosition(this.current_connection.positionUpdateHandler);
-		if(start_element!=null) {
-			this.current_connection.start_attach = get_parent(start_element);
+		if (start_element != null && this.current_connection.getStartAttach) {
+			this.current_connection.setStartAttach(get_parent(start_element));
 		}
 		this.current_connection.set_name(primitive_name);
-	}
-	static mouse_move(x,y) {
-		if(this.current_connection==null) {
-			return;
-		}
-		this.current_connection.endx=x;
-		this.current_connection.endy=y;
-		this.current_connection.update();
-	}
-	static mouse_up(x,y) {
-		this.mouse_move(x,y);
-		if(this.current_connection.end_anchor==null) {
-			this.current_connection.create_dummy_end_anchor();
-		}
-		if(this.current_connection.start_anchor==null) {
+		
+		if (this.current_connection.start_anchor == null) {
+			// a dummy anchor has no attached object
 			this.current_connection.create_dummy_start_anchor();
 		}
-		
-		attach_selected_anchor(this.current_connection.end_anchor);
+	}
+	static mouseMove(x,y) {
+		if (this.current_connection == null) {
+			return;
+		}
+		this.current_connection.endx = x;
+		this.current_connection.endy = y;
+		this.current_connection.update();
+	}
+	static leftMouseUp(x,y) {
+		this.mouseMove(x,y);
+		if (this.current_connection.end_anchor == null) {
+			// a dummy anchor has no attached object
+			this.current_connection.create_dummy_end_anchor();
+		}
+		// if (this.current_connection.start_anchor == null) {
+		// 	// a dummy anchor has no attached object
+		// 	this.current_connection.create_dummy_start_anchor();
+		// }
+		if (this.current_connection.getStartAttach) {
+			attach_selected_anchor(this.current_connection.end_anchor);
+		}
 		
 		this.current_connection.start_anchor.updatePosition();
 		this.current_connection.end_anchor.updatePosition();
@@ -2670,157 +3465,188 @@ class TwoPointer_tool extends baseTool {
 		this.current_connection.finishCreate();
 		this.create_TwoPointer_end();
 		
-		this.current_connection=null;
+		this.current_connection = null;
 		last_clicked_element = null;
 		ToolBox.setTool("mouse");
 	}
-	static leave_tool() {
+	static leaveTool() {
 		last_clicked_element = null;
 	}
 }
-class FlowTool extends TwoPointer_tool {
-	static create_TwoPointer_start(x,y,name) {
-		this.primitive = createConnector(name, "Flow", null,null);
-		setNonNegative(this.primitive,false);
+
+class FlowTool extends TwoPointerTool {
+	static create_TwoPointer_start(x, y, name) {
+		this.primitive = createConnector(name, "Flow", null, null);
+		setNonNegative(this.primitive, false); 			// What does this do?
 		
 		let rotateName = this.primitive.getAttribute("RotateName");
 		// Force all stocks to have a RotateName
-		if(!rotateName) {
+		if (!rotateName) {
 			rotateName = "0";
-			this.primitive.setAttribute("RotateName",rotateName);
+			this.primitive.setAttribute("RotateName", rotateName);
 		}		
 		
-		this.current_connection=new FlowVisual(this.primitive.id,this.get_type(),[x,y]);
+		this.current_connection = new FlowVisual(this.primitive.id, this.getType(), [x,y]);
 		this.current_connection.name_pos = rotateName;
 		update_name_pos(this.primitive.id);
 	}
-	static get_type() {
+	static mouseMove(x, y) {
+		let dir;
+		if (this.current_connection.anchorPoints.length == 1) {
+			dir = neswDirection(this.current_connection.anchorPoints[0].get_pos(), [x, y]);
+			if (dir == "north" || dir == "south") {
+				this.current_connection.endx = this.current_connection.anchorPoints[0].get_pos()[0];
+				this.current_connection.endy = y;
+			} else {
+				this.current_connection.endx = x;
+				this.current_connection.endy = this.current_connection.anchorPoints[0].get_pos()[1];
+			}
+		} else {
+			let anchorPoints = this.current_connection.anchorPoints;
+			let lastAnchor = anchorPoints[anchorPoints.length-1];
+			let secondLastAnchor = anchorPoints[anchorPoints.length-2];
+			dir = neswDirection(secondLastAnchor.get_pos(), lastAnchor.get_pos());
+			if (dir == "north" || dir == "south") {
+				this.current_connection.endx = x;
+				this.current_connection.endy = lastAnchor.get_pos()[1];
+			} else {
+				this.current_connection.endx = lastAnchor.get_pos()[0];
+				this.current_connection.endy = y;
+			}
+		}
+		this.current_connection.update();
+	}
+	static rightMouseDown(x,y) {
+		do_global_log("Right mouse on: "+x+", "+y);
+		this.current_connection.createAnchorPoint(x, y);
+	}
+
+	static getType() {
 		return "flow";
 	}
 }
 FlowTool.init();
 
-
 function cleanUnconnectedLinks() {
 	let allLinks = primitives("Link");
 	for(let link of allLinks) {
 		let ends = getEnds(link);
-		if((ends[0] == null) || (ends[1] == null)) {
+		if ((ends[0] == null) || (ends[1] == null)) {
 			removePrimitive(link);
 		}
 	}
 }
 
-class LinkTool extends TwoPointer_tool {
+class LinkTool extends TwoPointerTool {
 	static create_TwoPointer_start(x,y,name) {
 		this.primitive = createConnector(name, "Link", null,null);
-		this.current_connection=new LinkVisual(this.primitive.id,this.get_type(),[x,y]);
+		this.current_connection = new LinkVisual(this.primitive.id,this.getType(),[x,y]);
 	}
 	static create_TwoPointer_end() {
 		cleanUnconnectedLinks();
 	}
-	static get_type() {
+	static getType() {
 		return "link";
 	}
 }
 LinkTool.init();
 
-class RectangleTool extends TwoPointer_tool {
+class RectangleTool extends TwoPointerTool {
 	static create_TwoPointer_start(x,y,name) {
 		this.primitive = createConnector(name, "Rectangle", null,null);
-		this.current_connection=new RectangleVisual(this.primitive.id,this.get_type(),[x,y]);
+		this.current_connection = new RectangleVisual(this.primitive.id,this.getType(),[x,y]);
 	}
-	static get_type() {
+	static getType() {
 		return "rectangle";
 	}
 }
 RectangleTool.init();
 
-class LineTool extends TwoPointer_tool {
+class LineTool extends TwoPointerTool {
 	static create_TwoPointer_start(x,y,name) {
 		this.primitive = createConnector(name, "Line", null,null);
-		this.current_connection=new LineVisual(this.primitive.id,this.get_type(),[x,y]);
+		this.current_connection = new LineVisual(this.primitive.id,this.getType(),[x,y]);
 	}
-	static get_type() {
+	static getType() {
 		return "line";
 	}
 }
 LineTool.init();
 
-class TableTool extends TwoPointer_tool {
+class TableTool extends TwoPointerTool {
 	static create_TwoPointer_start(x,y,name) {
 		this.primitive = createConnector(name, "Table", null,null);
-		this.current_connection=new TableVisual(this.primitive.id,this.get_type(),[x,y]);
+		this.current_connection = new TableVisual(this.primitive.id,this.getType(),[x,y]);
 	}
 	static init() {
-		this.initialSelectedIds=[];
+		this.initialSelectedIds = [];
 		super.init();
 	}
-	static mouse_down(x,y) {
-		this.initialSelectedIds=Object.keys(get_selected_root_objects());
-		super.mouse_down(x,y)
+	static leftMouseDown(x,y) {
+		this.initialSelectedIds = Object.keys(get_selected_root_objects());
+		super.leftMouseDown(x,y)
 		this.current_connection.dialog.setIdsToDisplay(this.initialSelectedIds);
 		this.current_connection.render();
 	}
-	static get_type() {
+	static getType() {
 		return "table";
 	}
 }
 TableTool.init();
 
-class DiagramTool extends TwoPointer_tool {
+class DiagramTool extends TwoPointerTool {
 	static create_TwoPointer_start(x,y,name) {
 		this.primitive = createConnector(name, "Diagram", null,null);
-		this.current_connection=new DiagramVisual(this.primitive.id,this.get_type(),[x,y]);
+		this.current_connection = new DiagramVisual(this.primitive.id,this.getType(),[x,y]);
 	}
 	static init() {
-		this.initialSelectedIds=[];
+		this.initialSelectedIds = [];
 		super.init();
 	}
-	static mouse_down(x,y) {
-		this.initialSelectedIds=Object.keys(get_selected_root_objects());
-		super.mouse_down(x,y)
+	static leftMouseDown(x,y) {
+		this.initialSelectedIds = Object.keys(get_selected_root_objects());
+		super.leftMouseDown(x,y)
 		this.current_connection.dialog.setIdsToDisplay(this.initialSelectedIds);
 		this.current_connection.render();
 	}
-	static get_type() {
+	static getType() {
 		return "diagram";
 	}
 }
 DiagramTool.init();
 
-class TextAreaTool extends TwoPointer_tool {
+class TextAreaTool extends TwoPointerTool {
 	static create_TwoPointer_start(x,y,name) {
 		let primitive_name = findFreeName(type_basename["text"]);
 		this.primitive = createConnector(primitive_name, "TextArea", null,null);
-		this.current_connection=new TextAreaVisual(this.primitive.id,this.get_type(),[x,y]);
+		this.current_connection = new TextAreaVisual(this.primitive.id,this.getType(),[x,y]);
 	}
 	static init() {
-		this.initialSelectedIds=[];
+		this.initialSelectedIds = [];
 		super.init();
 	}
-	static get_type() {
+	static getType() {
 		return "diagram";
 	}
 }
 DiagramTool.init();
 
-class XyPlotTool extends TwoPointer_tool {
+class XyPlotTool extends TwoPointerTool {
 	static create_TwoPointer_start(x,y,name) {
 		this.primitive = createConnector(name, "XyPlot", null,null);
-		this.current_connection=new XyPlotVisual(this.primitive.id,this.get_type(),[x,y]);
+		this.current_connection = new XyPlotVisual(this.primitive.id,this.getType(),[x,y]);
 	}
 	static init() {
-		this.initialSelectedIds=[];
+		this.initialSelectedIds = [];
 		super.init();
 	}
-	static mouse_down(x,y) {
-		this.initialSelectedIds=Object.keys(get_selected_root_objects());
-		super.mouse_down(x,y)
+	static leftMouseDown(x,y) {
+		this.initialSelectedIds = Object.keys(get_selected_root_objects());
+		super.leftMouseDown(x,y)
 		this.current_connection.dialog.setIdsToDisplay(this.initialSelectedIds);
 		this.current_connection.render();
 	}
-	static get_type() {
+	static getType() {
 		return "xyplot";
 	}
 }
@@ -2836,21 +3662,27 @@ function attach_selected_anchor(selectedAnchor) {
 	
 
 	// Find unselected stock element
-	for(var i=0;i<elements_under.length;i++) {
-		if(!elements_under[i].is_selected() && ("get_mount_pos" in elements_under[i]) && elements_under[i] != parentConnection) {
-			attach_to=elements_under[i]; 
+	for(var i = 0; i < elements_under.length; i++) {
+		let element = elements_under[i];
+		
+		let elemIsNotSelected = ! element.is_selected();
+		let elemIsOkType = parentConnection.attachableTypes.includes(element.getType());
+		let elemIsNotParentOfAnchor = element[i] != parentConnection;
+		if (elemIsNotSelected && elemIsOkType && elemIsNotParentOfAnchor) {
+			attach_to = element;
+			break;
 		}
 	}
-	if(attach_to==null) {
+	if (attach_to == null) {
 		return false;
 	}
 	
 	switch(selectedAnchor.getAnchorType()) {
 	case anchorTypeEnum.start:
-		parentConnection.start_attach = attach_to;
+		parentConnection.setStartAttach(attach_to);
 		break;
 	case anchorTypeEnum.end:
-		parentConnection.end_attach = attach_to;
+		parentConnection.setEndAttach(attach_to);
 		break;
 	}
 	
@@ -2858,22 +3690,22 @@ function attach_selected_anchor(selectedAnchor) {
 	return true;
 }
 
-var current_tool = MouseTool;
+var currentTool = MouseTool;
 
 class CoordRect {
 	constructor() {
-		this.x1=0;
-		this.y1=0;
-		this.x2=0;
-		this.y2=0;
+		this.x1 = 0;
+		this.y1 = 0;
+		this.x2 = 0;
+		this.y2 = 0;
 		this.element = null; // This is set at page ready
 	}
 	setVisible(new_visible) {
-		if(new_visible) {
-			this.element.setAttribute("visibility","visible");
+		if (new_visible) {
+			this.element.setAttribute("visibility", "visible");
 		}
 		else {
-			this.element.setAttribute("visibility","hidden");
+			this.element.setAttribute("visibility", "hidden");
 		}
 	}
 	xmin() {
@@ -2899,7 +3731,7 @@ class CoordRect {
 rectselector = new CoordRect();
 
 function in_selection(node_id) {
-	if(
+	if (
 		object_array[node_id].pos[0] >= rectselector.xmin()
 	&&  object_array[node_id].pos[1] >= rectselector.ymin()
 	&&  object_array[node_id].pos[0] <= rectselector.xmin()+rectselector.width()
@@ -2914,7 +3746,7 @@ function in_selection(node_id) {
 function get_objects_in_rectselect() {
 	var return_array = {};
 	for(var key in object_array) {
-		if(in_selection(key)) {
+		if (in_selection(key)) {
 			return_array[key] = object_array[key];
 		}
 	}
@@ -2927,21 +3759,38 @@ function tool_deletePrimitive(id) {
 	removePrimitive(primitive);
 	
 	// Delete ghosts
-	var ghostIDs=findGhostsOfID(id);
+	var ghostIDs = findGhostsOfID(id);
 	for(var i in ghostIDs) {
 		tool_deletePrimitive(ghostIDs[i]);
 	}
 	cleanUnconnectedLinks();
+	detachFlows(id);
+}
+
+function detachFlows(id) {
+	for (let key in connection_array) {
+		let connection = connection_array[key];
+		if (connection.type == "flow") {
+			if (connection.getStartAttach() && connection.getStartAttach().id == id) {
+				connection.setStartAttach(null);
+				connection.update();
+			}
+			if (connection.getEndAttach() && connection.getEndAttach().id == id) {
+				connection.setEndAttach(null);
+				connection.update();
+			}
+		}
+	}
 }
 
 function get_selected_root_objects() {
-	var result={};
+	var result = {};
 	var all_objects = get_all_objects();
 	for(var key in all_objects) {
 		let parent = get_parent(all_objects[key]);
 		
 		// If any element is selected we add its parent
-		if(all_objects[key].is_selected()) {
+		if (all_objects[key].is_selected()) {
 			result[parent.id]=parent;
 		}
 	}
@@ -2949,10 +3798,10 @@ function get_selected_root_objects() {
 }
 
 function get_root_objects() {
-	var result={};
+	var result = {};
 	var all_objects = get_all_objects();
 	for(var key in all_objects) {
-		if(key.indexOf(".")==-1) {
+		if (key.indexOf(".") == -1) {
 			result[key]=all_objects[key];
 		}
 	}
@@ -2961,21 +3810,25 @@ function get_root_objects() {
 
 function delete_selected_objects() {
 	// Delete all objects that are selected
-	var object_array=get_selected_root_objects();
+	var object_array = get_selected_root_objects();
 	for(var key in object_array) {
+		// check if object not already deleted
+		// e.i. link gets deleted automatically if any of it's attachments gets deleted
+		if (get_object(key)) {
 			tool_deletePrimitive(key);
+		}
 	}
 }
 
 function get_selected_objects() {
 	var return_array = {};
 	for(var key in object_array) {
-		if(object_array[key].is_selected()) {
+		if (object_array[key].is_selected()) {
 			return_array[key] = object_array[key];
 		}
 	}
 	for(var key in connection_array) {
-		if(connection_array[key].is_selected()) {
+		if (connection_array[key].is_selected()) {
 			return_array[key] = connection_array[key];
 		}
 	}
@@ -2987,7 +3840,7 @@ function get_selected_ids() {
 }
 
 function delete_connection(key) {
-	if(!(key in connection_array)) {
+	if (!(key in connection_array)) {
 		return;
 	}
 	var start_anchor = connection_array[key].start_anchor;
@@ -3007,14 +3860,14 @@ function delete_object(node_id) {
 	
 	// Delete all references to the object in the connections
 	for(var key in connection_array) {
-		if(connection_array[key].start_anchor==object_to_delete) {
+		if (connection_array[key].start_anchor == object_to_delete) {
 			connection_array[key].create_dummy_start_anchor();
 		}
-		if(connection_array[key].end_anchor==object_to_delete) {
+		if (connection_array[key].end_anchor == object_to_delete) {
 			connection_array[key].create_dummy_end_anchor();
 		}
 	}
-	if(object_to_delete.hasOwnProperty("parent_id")) {
+	if (object_to_delete.hasOwnProperty("parent_id")) {
 		delete_connection(object_to_delete.parent_id);
 	}
 	
@@ -3028,28 +3881,28 @@ function delete_object(node_id) {
 	delete object_to_delete;
 	delete object_array[node_id];
 }
-function primitive_mousedown(node_id,event,new_primitive) {
+function primitive_mousedown(node_id, event, new_primitive) {
 	last_clicked_element = get_object(node_id);
 	
 	// If we click directly on the anchors we dont want anything but them selected
-	if(last_clicked_element.type=="dummy_anchor") {
+	if (last_clicked_element.type == "dummy_anchor") {
 		let elementId = get_parent_id(last_clicked_element.id);
 		unselect_all_but(elementId);
 	}
-	if(last_clicked_element.is_selected()) {
-		if(event.shiftKey) {
+	if (last_clicked_element.is_selected()) {
+		if (event.shiftKey) {
 			last_clicked_element.unselect();
 		}
 	} else {
-		if(!event.shiftKey) {
+		if (!event.shiftKey) {
 			// We don't want to unselect an eventual parent
 			// As that will hide other anchors
-			var parent_id=get_parent_id(node_id);
+			var parent_id = get_parent_id(node_id);
 			unselect_all_but(parent_id);
 		}
 		last_clicked_element.select();
 	}
-	last_click_object_clicked=true;
+	last_click_object_clicked = true;
 }
 
 function update_all_objects() {
@@ -3062,7 +3915,7 @@ function update_all_objects() {
 }
 
 function get_all_objects() {
-	var result={}
+	var result = {}
 	for(var key in object_array) {
 		result[key]=object_array[key];
 	}
@@ -3073,21 +3926,20 @@ function get_all_objects() {
 }
 
 function get_anchors(id) {
-	var result=[]
+	var result = []
 	for(var key in object_array) {
-		if(key.startsWith(id+".") && object_array[key].type=="dummy_anchor") {
+		if (key.startsWith(id+".") && object_array[key].type == "dummy_anchor") {
 			result.push(object_array[key]);
 		}
 	}
 	return result;
 }
 
-
 function get_object(id) {
-	if(typeof object_array[id]!="undefined") {
+	if (typeof object_array[id] != "undefined") {
 		return object_array[id];
 	}
-	if(typeof connection_array[id]!="undefined") {
+	if (typeof connection_array[id] != "undefined") {
 		return connection_array[id];
 	}
 	return false;
@@ -3095,7 +3947,7 @@ function get_object(id) {
 
 function set_name(id,new_name) {
 	var tobject = get_object(id);
-	if(!tobject)  {
+	if (!tobject)  {
 		return;
 	}
 	tobject.set_name(new_name);
@@ -3104,15 +3956,15 @@ function set_name(id,new_name) {
 
 function rel_move(node_id,diff_x,diff_y) {
 	let primitive = findID(node_id);
-	if(primitive != null) {
+	if (primitive != null) {
 		// If its a real primitive (stoch, variable etc) update it in the engine
 		let oldPos = getCenterPosition(primitive);
 		let newPos = [oldPos[0]+diff_x,oldPos[1]+diff_y];
 		setCenterPosition(primitive,newPos);
 	} else {
 		// If its not a real primtiive but rather an anchor point updated the position only graphically
-		object_array[node_id].pos[0]+=diff_x;
-		object_array[node_id].pos[1]+=diff_y;
+		object_array[node_id].pos[0] += diff_x;
+		object_array[node_id].pos[1] += diff_y;
 	}
 	object_array[node_id].updatePosition();
 	object_array[node_id].afterMove(diff_x,diff_y);
@@ -3133,51 +3985,46 @@ function unselect_all() {
 
 function unselect_all_but(dont_unselect_id) {
 	for(var key in object_array) {
-		if(key!=dont_unselect_id) {
+		if (key != dont_unselect_id) {
 			object_array[key].unselect();
 		}
 	}
 	for(var key in connection_array) {
-		if(key!=dont_unselect_id) {
+		if (key != dont_unselect_id) {
 			connection_array[key].unselect();
 		}
 	}
 }
-
 
 function unselect_all_but_family(id) {
 	for(var key in object_array) {
-		if(!is_family(id,key)) {
+		if (!is_family(id,key)) {
 			object_array[key].unselect();
 		}
 	}
 	for(var key in connection_array) {
-		if(!is_family(id,key)) {
+		if (!is_family(id,key)) {
 			connection_array[key].unselect();
 		}
 	}
 }
-
-
-
-
 
 function empty_click() {
 	empty_click_down = true;
 	unselect_all();
-	rectselector.x1=mousedown_x;
-	rectselector.y1=mousedown_y;
-	rectselector.x2=mousedown_x;
-	rectselector.y2=mousedown_y;
+	rectselector.x1 = mousedown_x;
+	rectselector.y1 = mousedown_y;
+	rectselector.x2 = mousedown_x;
+	rectselector.y2 = mousedown_y;
 	rectselector.update();
 }
 
 function rotate_name(node_id) {
 	let object = get_object(node_id);
-	if(object.name_pos<3) {
+	if (object.name_pos<3) {
 		object.name_pos++;
 	} else {
-		object.name_pos=0;
+		object.name_pos = 0;
 	}
 	update_name_pos(node_id);
 }
@@ -3186,19 +4033,19 @@ function update_name_pos(node_id) {
 	var object = get_object(node_id);
 	var name_element = object.name_element;
 	// Some objects does not have name element
-	if(name_element==null) {
+	if (name_element == null) {
 		return;
 	}
 	// For fixed names (used only by text element)
-	if(object.name_centered) {
+	if (object.name_centered) {
 		name_element.setAttribute("x",0); //Set path's data
 		name_element.setAttribute("y",0); //Set path's data
-		name_element.setAttribute("text-anchor","middle");
+		name_element.setAttribute("text-anchor", "middle");
 		return;
 	}
 
 	let visualObject = get_object(node_id);
-	let pos=visualObject.rotatePosList[visualObject.name_pos];
+	let pos = visualObject.namePosList[visualObject.name_pos];
 	name_element.setAttribute("x",pos[0]); //Set path's data
 	name_element.setAttribute("y",pos[1]); //Set path's data
 
@@ -3207,74 +4054,98 @@ function update_name_pos(node_id) {
 		// Below
 				//~ name_element.setAttribute("x",0); //Set path's data
 				//~ name_element.setAttribute("y",dist_down); //Set path's data
-				name_element.setAttribute("text-anchor","middle");
+				name_element.setAttribute("text-anchor", "middle");
 		break;
 		case 1:
 		// To the right
 				//~ name_element.setAttribute("x",dist_right); //Set path's data
 				//~ name_element.setAttribute("y",0); //Set path's data
-				name_element.setAttribute("text-anchor","start");
+				name_element.setAttribute("text-anchor", "start");
 		break;
 		case 2:
 		// Above
 				//~ name_element.setAttribute("x",0); //Set path's data
 				//~ name_element.setAttribute("y",-dist_up); //Set path's data
-				name_element.setAttribute("text-anchor","middle");
+				name_element.setAttribute("text-anchor", "middle");
 		break;
 		case 3:
 		// To the left
 				//~ name_element.setAttribute("x",-dist_left); //Set path's data
 				//~ name_element.setAttribute("y",0); //Set path's data
-				name_element.setAttribute("text-anchor","end");
-				//~ name_element.setAttribute("alignment-baseline","hanging");
+				name_element.setAttribute("text-anchor", "end");
+				//~ name_element.setAttribute("alignment-baseline", "hanging");
 		break;
 	}
 }
 
-function mousedown_handler(event) {
-	do_global_log("mousedown_handler");
-	mouseisdown=true;
+function mouseDownHandler(event) {
+	do_global_log("mouseDownHandler");
 	var offset = $(svgplane).offset();
-	var x=event.pageX-offset.left;
+	var x = event.pageX-offset.left;
 	var y = event.pageY-offset.top;
 	do_global_log("x:"+x+" y:"+y);
-	current_tool.mouse_down(x,y);
+	switch (event.which) {
+		case 1:
+			// if left mouse button down
+			mouseisdown = true;
+			currentTool.leftMouseDown(x,y);	
+			break;
+		case 3: 
+			// if right mouse button down
+			currentTool.rightMouseDown(x,y);
+			break;
+	}
 }
-function mousemove_handler(event) {
+function mouseMoveHandler(event) {
 	var offset = $(svgplane).offset();
-	var x=event.pageX-offset.left;
+	var x = event.pageX-offset.left;
 	var y = event.pageY-offset.top;
 	
 	lastMouseX = x;
 	lastMouseY = y;
 	
-	if(!mouseisdown) {
+	if (!mouseisdown) {
 		return;
 	}
-	current_tool.mouse_move(x,y);
+	currentTool.mouseMove(x,y);
 }
-function find_elements_under(in_x,in_y) {
+function mouseUpHandler(event) {
+	if (event.which != 1) {
+		do_global_log("Button other then left mouse was released up");
+		return;
+	}
+	if (!mouseisdown) {
+		return;
+	}
+	// does not work to store UndoState here, because mouseUpHandler happens even when we are outside the svg (click buttons etc)
+	do_global_log("mouseUpHandler");
 	var offset = $(svgplane).offset();
-	var x= in_x+offset.left-window.scrollX;
-	var y = in_y+offset.top-window.scrollY;
+	var x = event.pageX-offset.left;
+	var y = event.pageY-offset.top;
 	
-	var found_array=[];
+	currentTool.leftMouseUp(x,y);
+	mouseisdown = false;
+	updateInfoBar();
+	History.storeUndoState();
+}
+
+function find_elements_under(x, y) {	
+	var found_array = [];
 	let objects = get_all_objects();
 	// Having "flow" in this list causes a bug with flows that does not place properly
-	//~ let attachable_object_types=["flow","stock","variable"];
-	let attachable_object_types=["flow","stock","variable","converter"];
+	//~ let attachable_object_types = ["flow", "stock", "variable"];
+	let attachable_object_types = ["flow", "stock", "variable", "converter"];
 	for(key in objects) {
-		if(objects[key].type == "dummy_anchor") {
+		if (objects[key].type == "dummy_anchor") {
 			// We are only intressted in primitive-objects. not dummy_anchors
 			continue;
 		}
-		if(attachable_object_types.indexOf(objects[key].type) == -1) {
+		if (attachable_object_types.indexOf(objects[key].type) == -1) {
 			// We skip if the object is not attachable
 			continue;
 		}
-		var rect=objects[key].group.getBoundingClientRect();
-		do_global_log(key+" "+objects[key].type+" x:"+rect.left+"-"+rect.right+" y:"+rect.top+"-"+rect.bottom);
-		if(x>=rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+		var rect = objects[key].getBoundRect();
+		if (isInLimits(rect.minX, x, rect.maxX) && isInLimits(rect.minY, y, rect.maxY)) {
 			found_array.push(objects[key]);
 		}
 	}
@@ -3283,8 +4154,8 @@ function find_elements_under(in_x,in_y) {
 }
 
 function find_element_under(x,y) {
-	elements_under=find_elements_under(x,y);
-	if(elements_under.length>0) {
+	elements_under = find_elements_under(x,y);
+	if (elements_under.length>0) {
 		do_global_log("find_element_under choose "+elements_under[0].id);
 		return elements_under[0];
 	} else {
@@ -3292,33 +4163,18 @@ function find_element_under(x,y) {
 	}
 }
 
-function mouseup_handler(event) {
-	if(!mouseisdown) {
-		return;
-	}
-	// does not work to store UndoState here, because mouseup_handler happens even when we are outside the svg (click buttons etc)
-	do_global_log("mouseup_handler");
-	var offset = $(svgplane).offset();
-	var x=event.pageX-offset.left;
-	var y = event.pageY-offset.top;
-	
-	current_tool.mouse_up(x,y);
-	mouseisdown=false;
-	History.storeUndoState();
-}
 function stochsd_clear_sync() {
-	var root_object_array=get_root_objects();
+	var root_object_array = get_root_objects();
 	for(var id in root_object_array) {
-		if(findID(id)==null) {
+		if (findID(id) == null) {
 			stochsd_delete_primitive(id);
 		}
 	}
 }
 
-
 class ToolBox {
 	static init() {
-		this.tools={
+		this.tools = {
 			"mouse":MouseTool,
 			"delete":DeleteTool,
 			"undo":UndoTool,
@@ -3326,9 +4182,12 @@ class ToolBox {
 			"stock":StockTool,
 			"converter":ConverterTool,
 			"variable":VariableTool,
+			"constant":ConstantTool,
 			"flow":FlowTool,
 			"link":LinkTool,
 			"rotatename":RotateNameTool,
+			"movevalve":MoveValveTool,
+			"straightenlink": StraightenLinkTool,
 			"ghost":GhostTool,
 			//~ "text":TextTool,
 			"text":TextAreaTool,
@@ -3344,13 +4203,13 @@ class ToolBox {
 		};
 	}
 	static setTool(toolName) {
-		if(toolName in this.tools) {
+		if (toolName in this.tools) {
 			$(".toolButton").removeClass("pressed");
 			$("#btn_"+toolName).addClass("pressed");
 			
-			current_tool.leave_tool();
-			current_tool=this.tools[toolName];
-			current_tool.enter_tool();
+			currentTool.leaveTool();
+			currentTool = this.tools[toolName];
+			currentTool.enterTool();
 		} else {
 			errorPopUp("The tool "+toolName+" does not exist");
 		}
@@ -3363,15 +4222,15 @@ ToolBox.init();
 
 class ClipboardItem {
 	constructor(id) {
-		this.id=id;
-		this.absolutePosition=[0,0];
-		this.relativePosition=[0,0];
+		this.id = id;
+		this.absolutePosition = [0,0];
+		this.relativePosition = [0,0];
 	}
 }
 
 class Clipboard {
 	static init() {
-		this.copiedItems=[];
+		this.copiedItems = [];
 	}
 	static copyObject(clipboardItem) {
 		var parent = graph.children[0].children[0];
@@ -3390,7 +4249,7 @@ class Clipboard {
 		let parentIdArray = [];
 		for(let i in rawSelectedIdArray) {
 			let parentId = get_parent_id(rawSelectedIdArray[i]);
-			if(parentIdArray.indexOf(parentId)==-1) {
+			if (parentIdArray.indexOf(parentId) == -1) {
 				parentIdArray.push(parentId);
 			}
 		}
@@ -3400,14 +4259,14 @@ class Clipboard {
 			let clipboardItem = new ClipboardItem(parentIdArray[i]);
 			let tmp_object = get_object(parentIdArray[i]);
 			
-			let absolutePosition=tmp_object.get_pos();
-			clipboardItem.absolutePosition=absolutePosition;
+			let absolutePosition = tmp_object.get_pos();
+			clipboardItem.absolutePosition = absolutePosition;
 			
 			this.copiedItems.push(clipboardItem);			
 		}
 		
 		// Create position list to calculate relative positions
-		let positionList=[];
+		let positionList = [];
 		for(let i in this.copiedItems) {
 			positionList.push(this.copiedItems[i].absolutePosition);
 			do_global_log(JSON.stringify(positionList));
@@ -3435,15 +4294,16 @@ function showDebug() {
 }
 
 function hashUpdate() {
-	if(location.hash == "#debug") {
+	if (location.hash == "#debug") {
 		showDebug();
 	}
 }
 
 $(document).ready(function() {
-	rectselector.element=svg_rect(-30,-30,60,60,"green","none","element");
+	rectselector.element = svg_rect(-30,-30,60,60, "black", "none", "element");
+	rectselector.element.setAttribute("stroke-dasharray", "4 4");
 	rectselector.setVisible(false);
-	var svgplane=document.getElementById("svgplane");
+	var svgplane = document.getElementById("svgplane");
 	
 	$(".toolButton").mousedown(function(event) {
 		var toolName = $(this).attr("data-tool");
@@ -3453,54 +4313,54 @@ $(document).ready(function() {
 	$(window).bind( 'hashchange', hashUpdate);
 	hashUpdate();
 	
-	if(Settings.showDebug) {
+	if (Settings.showDebug) {
 		showDebug();
 	}
 	
-	$(document).keydown(function(event){
+	$(document).keydown(function(event) {
 		// Only works if no dialog is open
-		if(jqDialog.blockingDialogOpen) {
+		if (jqDialog.blockingDialogOpen) {
 			return;
 		}
-		if(event.keyCode == keyboard["delete"]) {
-			DeleteTool.enter_tool();
+		if (event.keyCode == keyboard["delete"]) {
+			DeleteTool.enterTool();
 		}
 		
-		if(event.ctrlKey) {
-			if(event.keyCode == keyboard["1"]) {
+		if (event.ctrlKey) {
+			if (event.keyCode == keyboard["1"]) {
 				event.preventDefault();
-				RunTool.enter_tool();
+				RunTool.enterTool();
 			}
-			if(event.keyCode == keyboard["2"]) {
+			if (event.keyCode == keyboard["2"]) {
 				event.preventDefault();
-				StepTool.enter_tool();
+				StepTool.enterTool();
 			}
-			if(event.keyCode == keyboard["3"]) {
+			if (event.keyCode == keyboard["3"]) {
 				event.preventDefault();
-				ResetTool.enter_tool();
+				ResetTool.enterTool();
 			}
-			if(event.keyCode == keyboard["O"]){
+			if (event.keyCode == keyboard["O"]) {
 				event.preventDefault();
 				$("#btn_load").click();
 			}
-			if(event.keyCode == keyboard["S"]){
+			if (event.keyCode == keyboard["S"]) {
 				event.preventDefault();
 				$("#btn_save").click();
 			}
-			if(event.keyCode == keyboard["P"]){
+			if (event.keyCode == keyboard["P"]) {
 				event.preventDefault();
 				$("#btn_print_model").click();
 			}
-			if(event.keyCode == keyboard["Z"]){
+			if (event.keyCode == keyboard["Z"]) {
 				History.doUndo();
 			}
-			if(event.keyCode == keyboard["Y"]){
+			if (event.keyCode == keyboard["Y"]) {
 				History.doRedo();
 			}
-			if(event.keyCode == keyboard["C"]){
+			if (event.keyCode == keyboard["C"]) {
 				Clipboard.copy();
 			}
-			if(event.keyCode == keyboard["V"]){
+			if (event.keyCode == keyboard["V"]) {
 				Clipboard.paste();
 				History.storeUndoState();
 			}
@@ -3508,11 +4368,18 @@ $(document).ready(function() {
 		environment.keyDown(event);
 	});
 	
-	$(svgplane).mousedown(mousedown_handler);
+	$(svgplane).mousedown(mouseDownHandler);
+	svgplane.addEventListener('contextmenu', function(event) {
+		event.preventDefault();
+		return false;
+	}, false);
 	// the mousemove and mouseup event needs to be attached to the html to allow swipping the mouse outside
-	$("html").mousemove(mousemove_handler);
-	$("html").mouseup(mouseup_handler);
+	$("html").mousemove(mouseMoveHandler);
+	$("html").mouseup(mouseUpHandler);
 	ToolBox.setTool("mouse");
+	$("#btn_file").click(function() {
+		updateRecentsMenu();
+	});
 	$("#btn_new").click(function() {
 		saveChangedAlert(function() {
 			fileManager.newModel();
@@ -3524,9 +4391,11 @@ $(document).ready(function() {
 		});
 	});
 	$("#btn_save").click(function() {
+		History.storeUndoState();
 		fileManager.saveModel();
 	});
 	$("#btn_save_as").click(function() {
+		History.storeUndoState();
 		fileManager.saveModelAs();
 	});
 	$("#btn_simulation_settings").click(function() {
@@ -3538,7 +4407,45 @@ $(document).ready(function() {
 	$("#btn_print_model").click(function() {
 		unselect_all();
 		hideAndPrint([$("#topPanel").get(0)]);
-
+	});
+	$("#btn_black").click(function() {
+		setColorToSelection("black");
+	});
+	$("#btn_lightgrey").click(function() {
+		setColorToSelection("lightgrey");
+	});
+	$("#btn_red").click(function() {
+		setColorToSelection("red");
+	});
+	$("#btn_deeppink").click(function() {
+		setColorToSelection("deeppink");
+	});
+	$("#btn_brown").click(function() {
+		setColorToSelection("brown");
+	});
+	$("#btn_orange").click(function() {
+		setColorToSelection("orange");
+	});
+	$("#btn_gold").click(function() {
+		setColorToSelection("gold");
+	});
+	$("#btn_olive").click(function() {
+		setColorToSelection("olive");
+	});
+	$("#btn_green").click(function() {
+		setColorToSelection("green");
+	});
+	$("#btn_teal").click(function() {
+		setColorToSelection("teal");
+	});
+	$("#btn_blue").click(function() {
+		setColorToSelection("blue");
+	});
+	$("#btn_purple").click(function() {
+		setColorToSelection("purple");
+	});
+	$("#btn_magenta").click(function() {
+		setColorToSelection("magenta");
 	});
 	$("#btn_macro").click(function() {
 		macroDialog.show();
@@ -3561,8 +4468,16 @@ $(document).ready(function() {
 		let pluginName = $(event.target).data("plugin-name");
 		loadPlugin(pluginName);
 	});
-	if(fileManager.hasSaveAs()) {
+	if (fileManager.hasSaveAs()) {
 		$("#btn_save_as").show();
+	}
+	if (fileManager.hasRecentFiles()) {
+		for (let i = 0; i < 5; i++) {
+			$(`#btn_recent_${i}`).click(function(event) {
+				let filePath = event.target.getAttribute("filePath");
+				fileManager.loadFromFile(filePath);
+			});
+		}
 	}
 	macroDialog = new MacroDialog();
 	equationEditor = new EquationEditor();
@@ -3588,9 +4503,9 @@ function find_connections(primitive) {
 }
 
 function find_start_connections(primitive) {
-	var connections_array=Array(0);
+	var connections_array = Array(0);
 	for(key in connection_array) {
-		if(connection_array[key].start_anchor==primitive) {
+		if (connection_array[key].start_anchor == primitive) {
 			connections_array.push(connection_array[key]);
 		}
 	}
@@ -3598,9 +4513,9 @@ function find_start_connections(primitive) {
 }
 
 function find_end_connections(primitive) {
-	var connections_array=Array(0);
+	var connections_array = Array(0);
 	for(key in connection_array) {
-		if(connection_array[key].end_anchor==primitive) {
+		if (connection_array[key].end_anchor == primitive) {
 			connections_array.push(connection_array[key]);
 		}
 	}
@@ -3609,11 +4524,11 @@ function find_end_connections(primitive) {
 	
 function stochsd_delete_primitive (id) {
 	var stochsd_object = get_object(id);
-	if(stochsd_object) {
+	if (stochsd_object) {
 		stochsd_object.clean();
 	}
 	
-	if(object_array[id]) {
+	if (object_array[id]) {
 		delete object_array[id];
 	} else if (connection_array[id]) {
 		delete connection_array[id];
@@ -3622,11 +4537,9 @@ function stochsd_delete_primitive (id) {
 	}
 }
 
-
 var InsightMakerFileExtension = ".InsightMaker";
 
-
-function isLocal(){
+function isLocal() {
 	return true; // Expose additional debugging and error messages
 }
 
@@ -3637,7 +4550,7 @@ function export_txt(fileName, data) {
 	
 	// Create download link and click it
 	var a = document.createElement("a");
-	a.style.display="none";
+	a.style.display = "none";
 	a.href = url;
 	a.download = fileName;
 	document.body.appendChild(a);
@@ -3676,15 +4589,18 @@ loadXML(blankGraphTemplate);
 // Take a primitive from the engine(tprimitve) and makes a visual object from it
 function syncVisual(tprimitive) {
 	var stochsd_object = get_object(tprimitive.id);
-	if(stochsd_object!=false) {
+	if (stochsd_object != false) {
 		return false;
 	}
 	let nodeType = tprimitive.value.nodeName;
 	switch(nodeType) {
 		case "Numberbox":
 		{
-			var position=getCenterPosition(tprimitive);
-			let visualObject = new NumberboxVisual(tprimitive.id,"numberbox",position);
+			var position = getCenterPosition(tprimitive);
+			let visualObject = new NumberboxVisual(tprimitive.id, "numberbox",position);
+			if (tprimitive.getAttribute("color")) {
+				visualObject.setColor(tprimitive.getAttribute("color"));
+			}
 			visualObject.render();
 		}
 		break;
@@ -3704,13 +4620,17 @@ function syncVisual(tprimitive) {
 					dimClass = XyPlotVisual;
 				break;
 			}
-			var source_position=getSourcePosition(tprimitive);
-			var target_position=getTargetPosition(tprimitive);
+			var source_position = getSourcePosition(tprimitive);
+			var target_position = getTargetPosition(tprimitive);
 			
-			let connection = new dimClass(tprimitive.id,"table",[0,0]);
+			let connection = new dimClass(tprimitive.id, "table",[0,0]);
 			connection.create_dummy_start_anchor();
 			connection.create_dummy_end_anchor();			
 			
+			if (tprimitive.getAttribute("color")) {
+				connection.setColor(tprimitive.getAttribute("color"));
+			}
+
 			// Set UI-coordinates to coordinates in primitive
 			connection.start_anchor.set_pos(source_position);
 			// Set UI-coordinates to coordinates in primitive
@@ -3719,7 +4639,10 @@ function syncVisual(tprimitive) {
 			// Insert correct primtives
 			let primitivesString = tprimitive.value.getAttribute("Primitives");
 			let idsToDisplay = primitivesString.split(",");
-			connection.dialog.setIdsToDisplay(idsToDisplay);
+			if (primitivesString) {
+				connection.dialog.setIdsToDisplay(idsToDisplay);
+			}
+			
 			
 			connection.update();
 			connection.render();
@@ -3737,13 +4660,17 @@ function syncVisual(tprimitive) {
 					dimClass = RectangleVisual;
 				break;
 			}
-			var source_position=getSourcePosition(tprimitive);
-			var target_position=getTargetPosition(tprimitive);
+			var source_position = getSourcePosition(tprimitive);
+			var target_position = getTargetPosition(tprimitive);
 			
-			let connection = new dimClass(tprimitive.id,"table",[0,0]);
+			let connection = new dimClass(tprimitive.id, "table",[0,0]);
 			connection.create_dummy_start_anchor();
 			connection.create_dummy_end_anchor();			
 			
+			if (tprimitive.getAttribute("color")) {
+				connection.setColor(tprimitive.getAttribute("color"));
+			}
+
 			// Set UI-coordinates to coordinates in primitive
 			connection.start_anchor.set_pos(source_position);
 			// Set UI-coordinates to coordinates in primitive
@@ -3754,13 +4681,17 @@ function syncVisual(tprimitive) {
 		break;
 		case "TextArea":
 		{
-			var source_position=getSourcePosition(tprimitive);
-			var target_position=getTargetPosition(tprimitive);
+			var source_position = getSourcePosition(tprimitive);
+			var target_position = getTargetPosition(tprimitive);
 			
-			let connection = new TextAreaVisual(tprimitive.id,"table",[0,0]);
+			let connection = new TextAreaVisual(tprimitive.id, "table",[0,0]);
 			connection.create_dummy_start_anchor();
 			connection.create_dummy_end_anchor();			
 			
+			if (tprimitive.getAttribute("color")) {
+				connection.setColor(tprimitive.getAttribute("color"));
+			}
+
 			// Set UI-coordinates to coordinates in primitive
 			connection.start_anchor.set_pos(source_position);
 			// Set UI-coordinates to coordinates in primitive
@@ -3771,13 +4702,17 @@ function syncVisual(tprimitive) {
 		break;
 		case "Stock":
 		{
-			var position=getCenterPosition(tprimitive);
-			let visualObject = new StockVisual(tprimitive.id,"stock",position);
+			var position = getCenterPosition(tprimitive);
+			let visualObject = new StockVisual(tprimitive.id, "stock",position);
 			set_name(tprimitive.id,tprimitive.getAttribute("name"));
 			
+			if (tprimitive.getAttribute("color")) {
+				visualObject.setColor(tprimitive.getAttribute("color"));
+			}
+
 			let rotateName = tprimitive.getAttribute("RotateName");
 			// Force all stocks to have a RotateName
-			if(!rotateName) {
+			if (!rotateName) {
 				rotateName = "0";
 				tprimitive.setAttribute("RotateName",rotateName);
 			}
@@ -3787,13 +4722,17 @@ function syncVisual(tprimitive) {
 		break;
 		case "Converter":
 		{
-			var position=getCenterPosition(tprimitive);
-			let visualObject = new ConverterVisual(tprimitive.id,"converter",position);
+			var position = getCenterPosition(tprimitive);
+			let visualObject = new ConverterVisual(tprimitive.id, "converter",position);
 			set_name(tprimitive.id,tprimitive.getAttribute("name"));
 			
+			if (tprimitive.getAttribute("color")) {
+				visualObject.setColor(tprimitive.getAttribute("color"));
+			}
+
 			let rotateName = tprimitive.getAttribute("RotateName");
 			// Force all stocks to have a RotateName
-			if(!rotateName) {
+			if (!rotateName) {
 				rotateName = "0";
 				tprimitive.setAttribute("RotateName",rotateName);
 			}
@@ -3804,30 +4743,44 @@ function syncVisual(tprimitive) {
 		case "Text":
 		{
 			do_global_log("id is "+tprimitive.id);
-			var position=getCenterPosition(tprimitive);
-			new TextVisual(tprimitive.id,"text",position);
+			var position = getCenterPosition(tprimitive);
+			new TextVisual(tprimitive.id, "text",position);
+
+			if (tprimitive.getAttribute("color")) {
+				visualObject.setColor(tprimitive.getAttribute("color"));
+			}
+
 			set_name(tprimitive.id,tprimitive.getAttribute("name"));
 		}
 		break;
 		case "Ghost":
 		{
 			var source_primitive = findID(tprimitive.getAttribute("Source"));
-			var source_type=source_primitive.value.nodeName;
+			var source_type = source_primitive.value.nodeName;
 			//~ do_global_log("id is "+tprimitive.id);
-			var position=getCenterPosition(tprimitive);
+			var position = getCenterPosition(tprimitive);
 			let visualObject = null;
 			switch(source_type) {
 					case "Converter":
-						visualObject = new ConverterVisual(tprimitive.id,"converter",position,{"is_ghost":true});
+						visualObject = new ConverterVisual(tprimitive.id, "converter",position,{"is_ghost":true});
 						break;
 					case "Variable":
-						visualObject = new VariableVisual(tprimitive.id,"variable",position,{"is_ghost":true});
+						if (source_primitive.getAttribute("isConstant") == "true") {
+							visualObject = new ConstantVisual(tprimitive.id, "variable", position, {"is_ghost":true});
+						} else {
+							visualObject = new VariableVisual(tprimitive.id, "variable", position, {"is_ghost":true});
+						}
 						break;
 					case "Stock":
-						visualObject = new StockVisual(tprimitive.id,"stock",position,{"is_ghost":true});
+						visualObject = new StockVisual(tprimitive.id, "stock",position,{"is_ghost":true});
 						break;
 			}
 			set_name(tprimitive.id,tprimitive.getAttribute("name"));
+
+			if (tprimitive.getAttribute("color")) {
+				visualObject.setColor(tprimitive.getAttribute("color"));
+			}
+
 			visualObject.name_pos = tprimitive.getAttribute("RotateName");
 			update_name_pos(tprimitive.id);
 		}
@@ -3835,13 +4788,22 @@ function syncVisual(tprimitive) {
 		case "Variable":
 		{
 			//~ do_global_log("VARIABLE id is "+tprimitive.id);
-			var position=getCenterPosition(tprimitive);
-			visualObject = new VariableVisual(tprimitive.id,"variable",position);
+			var position = getCenterPosition(tprimitive);
+			let visualObject;
+			if (tprimitive.getAttribute("isConstant") == "false") {
+				visualObject = new VariableVisual(tprimitive.id, "variable",position);
+			} else {
+				visualObject = new ConstantVisual(tprimitive.id, "variable",position);
+			}
 			set_name(tprimitive.id,tprimitive.getAttribute("name"));
 			
+			if (tprimitive.getAttribute("color")) {
+				visualObject.setColor(tprimitive.getAttribute("color"));
+			}
+
 			let rotateName = tprimitive.getAttribute("RotateName");
 			// Force all stocks to have a RotateName
-			if(!rotateName) {
+			if (!rotateName) {
 				rotateName = "0";
 				tprimitive.setAttribute("RotateName",rotateName);
 			}
@@ -3850,79 +4812,92 @@ function syncVisual(tprimitive) {
 		}
 		break;
 		case "Flow":
+			let connection = new FlowVisual(tprimitive.id, "flow", [0,0]);
+
+			let rotateName = tprimitive.getAttribute("RotateName");
+			// Force all stocks to have a RotateName
+			if (!rotateName) {
+				rotateName = "0";
+				tprimitive.setAttribute("RotateName",rotateName);
+			}
+			connection.name_pos = rotateName;
+			update_name_pos(tprimitive.id);
+
+			var source_position = getSourcePosition(tprimitive);
+			var target_position = getTargetPosition(tprimitive);
+
+			connection.create_dummy_start_anchor();
+			connection.loadMiddlePoints();
+			connection.create_dummy_end_anchor();
+			
+			if (tprimitive.getAttribute("color")) {
+				connection.setColor(tprimitive.getAttribute("color"));
+			}
+
+			if (tprimitive.getAttribute("valveIndex")) {
+				connection.valveIndex = parseInt(tprimitive.getAttribute("valveIndex"));
+				connection.variableSide = (tprimitive.getAttribute("variableSide") == "true");
+			}
+
+			connection.start_anchor.set_pos(source_position);
+			connection.end_anchor.set_pos(target_position);
+			
+			if (tprimitive.source != null) {
+				// Attach to object
+				connection.setStartAttach(get_object(tprimitive.source.getAttribute("id")));
+			}
+			if (tprimitive.target != null) {
+				// Attach to object
+				connection.setEndAttach(get_object(tprimitive.target.getAttribute("id")));
+			}
+			connection.update();
+
+			set_name(tprimitive.id,getName(tprimitive));
+		break;
 		case "Link":
 		{
-			let connection = null;
-			var source_position=getSourcePosition(tprimitive);
-			var target_position=getTargetPosition(tprimitive);
-			switch(nodeType) {
-				case "Flow":
-				{
-					connection = new FlowVisual(tprimitive.id,"flow",[0,0]);
-					
-					let rotateName = tprimitive.getAttribute("RotateName");
-					// Force all stocks to have a RotateName
-					if(!rotateName) {
-						rotateName = "0";
-						tprimitive.setAttribute("RotateName",rotateName);
-					}
-					connection.name_pos = rotateName;
-					update_name_pos(tprimitive.id);
-				}	
-				break;
-				case "Link":
-				{
-					connection = new LinkVisual(tprimitive.id,"link",[0,0]);
-				}
-				break;
-			}
-			var source_position=getSourcePosition(tprimitive);
-			var target_position=getTargetPosition(tprimitive);
+			let connection = new LinkVisual(tprimitive.id, "link",[0,0]);
+
+			var source_position = getSourcePosition(tprimitive);
+			var target_position = getTargetPosition(tprimitive);
 
 			connection.create_dummy_start_anchor();
 			connection.create_dummy_end_anchor();
 			
-			if(tprimitive.source!=null) {
+			if (tprimitive.getAttribute("color")) {
+				connection.setColor(tprimitive.getAttribute("color"));
+			}
+
+			if (tprimitive.source != null) {
 				// Attach to object
-				connection.start_attach = get_object(tprimitive.source.getAttribute("id"));
+				connection.setStartAttach(get_object(tprimitive.source.getAttribute("id")));
 			} else {
 				// Set UI-coordinates to coordinates in primitive
 				connection.start_anchor.set_pos(source_position);
 			}
-			if(tprimitive.target!=null) {
+			if (tprimitive.target != null) {
 				// Attach to object
-				connection.end_attach = get_object(tprimitive.target.getAttribute("id"));
+				connection.setEndAttach(get_object(tprimitive.target.getAttribute("id")));
 			} else {
 				// Set UI-coordinates to coordinates in primitive
 				connection.end_anchor.set_pos(target_position);
 			}
 			connection.update();
-			switch(nodeType) {
-				case "Flow":
-				{
-					set_name(tprimitive.id,getName(tprimitive));
-				}
-				break;
-				case "Link":
-				{
-					let bezierPoints = [
-						tprimitive.value.getAttribute("b1x"),
-						tprimitive.value.getAttribute("b1y"),
-						tprimitive.value.getAttribute("b2x"),
-						tprimitive.value.getAttribute("b2y")
-					];
+			let bezierPoints = [
+				tprimitive.value.getAttribute("b1x"),
+				tprimitive.value.getAttribute("b1y"),
+				tprimitive.value.getAttribute("b2x"),
+				tprimitive.value.getAttribute("b2y")
+			];
 
-					if(bezierPoints.indexOf(null) == -1) {
-						connection.b1_anchor.set_pos([Number(bezierPoints[0]),Number(bezierPoints[1])]);
-						connection.b2_anchor.set_pos([Number(bezierPoints[2]),Number(bezierPoints[3])]);
-					} else {
-						// bezierPoints does not exist. Create them
-						connection.resetBezierPoints();
-					}
-					connection.curve.update();
-				}
-				break;
+			if (bezierPoints.indexOf(null) == -1) {
+				connection.b1_anchor.set_pos([Number(bezierPoints[0]),Number(bezierPoints[1])]);
+				connection.b2_anchor.set_pos([Number(bezierPoints[2]),Number(bezierPoints[3])]);
+			} else {
+				// bezierPoints does not exist. Create them
+				connection.resetBezierPoints();
 			}
+			connection.curve.update();
 		}
 		break;
 	}
@@ -3933,7 +4908,7 @@ function syncVisual(tprimitive) {
 // This is executed after loading a file or loading a whole new state such as after undo
 function syncAllVisuals() {
 	for(let type of saveblePrimitiveTypes) {
-	var primitive_list=primitives(type);
+		var primitive_list = primitives(type);
 		for(key in primitive_list) {
 			try {
 				syncVisual(primitive_list[key]);
@@ -3941,6 +4916,7 @@ function syncAllVisuals() {
 				removePrimitive(primitive_list[key]);
 				alert("Error while loading corrupted primitive of type "+type+". Removing corrupted primitive to avoid propagated errors.");
 				//~ alert("Error while loading corrupted primitive of type "+type+". Removing corrupted primitive to avoid propagated errors. \n\nError happened at: "+exception.stack);
+				throw exception;
 			}
 		}
 	}
@@ -3949,22 +4925,20 @@ function syncAllVisuals() {
 }
 
 function findFreeName(basename) {
-	var counter=0;
+	var counter = 0;
 	var testname;
 	do {
 		counter++;
 		testname = basename+counter.toString();
-	} while(findName(testname)!=null)
+	} while(findName(testname) != null)
 	return testname;
 }
 
-
 syncAllVisuals();
-
 
 class SubscribePool {
 	constructor() {
-		this.subscribers=[];
+		this.subscribers = [];
 	}
 	subscribe(handler) {
 		this.subscribers.push(handler);
@@ -3983,7 +4957,7 @@ class runOverlay {
 				$("#svgBlockOverlay").css("opacity",0.5);
 				yesNoAlert("Do you want to terminate the simulation now to change the model?",function(answer) {
 					$("#svgBlockOverlay").css("opacity",0);
-					if(answer=="yes") {
+					if (answer == "yes") {
 						RunResults.resetSimulation();
 					}
 				});
@@ -4008,24 +4982,88 @@ const runStateEnum = {
 	stepping: "stepping",
 	paused: "paused"
 }
+
+// Not yet implemented
+function setColorToSelection(color) {
+	let objects = get_selected_objects();
+	for(var id in objects) {
+		let obj = get_object(id);
+		get_parent(obj).setColor(color);
+	}
+	History.storeUndoState();
+}
+
+function removeNewLines(string) {
+	let newString = string;
+	newString = newString.replace(/\\n/g, " ");
+	return newString;
+}
+
+function updateRecentsMenu() {
+	if (fileManager.hasRecentFiles()) {
+		if (localStorage.recentFiles) {
+			let recent = JSON.parse(localStorage.recentFiles);
+			if (0 < recent.length) {
+				$('#recent_title').show();
+			}
+			for (let i = 0; i < recent.length; i++) {
+				$(`#btn_recent_${i}`).show();
+				$(`#btn_recent_${i}`).html(recent[i]);
+				$(`#btn_recent_${i}`).attr("filePath", recent[i]);
+			}
+		}
+	}
+}
+
+function updateInfoBar() {
+	let infoBar = $("#infoBar");
+	let selected_hash = get_selected_root_objects();
+	let selected_array = [];
+	for (let key in selected_hash) {
+		selected_array.push(selected_hash[key]);
+	}
+
+	if (selected_array == 0) {
+		infoBar.html("Nothing selected");
+	} else if (selected_array.length == 1) {
+		let selected = selected_array[0];
+		primitive = selected_array[0].primitive;
+		let name = primitive.getAttribute("name");
+		let definition = "";
+		definition = removeNewLines(getValue(primitive));
+		
+		if (definition != "") {
+			infoBar.html(`[${name}] = ${definition}`);
+		} else {
+			let type = selected.type;
+			
+			// Make first letter uppercase
+			type = type.charAt(0).toUpperCase() + type.slice(1); 
+			infoBar.html(`${type} selected`);
+		}
+	} else {
+		infoBar.html(`${selected_array.length} objects selected`)
+	}
+}
+
 class RunResults {
 	static init() {		
 		this.runState = runStateEnum.none;
 		// Is always null if simulation is not running
 		// Is a data structure returned from runModel if simulation is running it
 		this.simulationController = null;
-		this.varnameList=[];
+		this.varnameList = [];
 		this.varIdList = [];
-		this.varnameList=["Time"];
-		this.results=[];
-		this.runSubscribers=[];
+		this.varnameList = ["Time"];
+		this.results = [];
+		this.runSubscribers = [];
 		this.updateFrequency = 100;
 		this.updateCounter = 0; // Updates everytime updateCounter goes down to zero
 		this.simulationTime = 0;
 	}
 	static createHeader() {
 		// Get list of primitives that we want to observe from the model
-		var primitive_array=getPrimitiveList();
+		var primitive_array = getPrimitiveList();
 
 		// Create list of ids
 		this.varIdList = [0].concat(getID(primitive_array)).map(Number);
@@ -4038,45 +5076,45 @@ class RunResults {
 	}
 	static toCsv() {
 		// Under development
-		let out="";
+		let out = "";
 		
 		//~ let namesToDisplay = IdsToDisplay.map(findID).map(getName);
-		let first=true;
-		out+="Time"
+		let first = true;
+		out += "Time"
 		for(let id of this.varIdList) {
 			let primitive = findID(id);
-			if(primitive) {
+			if (primitive) {
 					out += ","+getName(primitive);
 			}
 		}
-		out+="\n";
+		out += "\n";
 		
 		for(let row_index in this.results) {
 			//~ for(let column_index in ["Time"].concat(namesToDisplay)) {
 			first = true;
 			for(let column_index in this.varIdList) {
-				if(first) {
-					out+=stocsd_format(this.results[row_index][column_index],6);
+				if (first) {
+					out += stocsd_format(this.results[row_index][column_index],6);
 					first = false;
 				} else {
-					out+=","+stocsd_format(this.results[row_index][column_index],6);
+					out += ","+stocsd_format(this.results[row_index][column_index],6);
 				}
 			}
-			out+="\n";
+			out += "\n";
 		}
 		return out;
 	}
-	static storeResults(res){
+	static storeResults(res) {
 		// This method is executed after the simulation is finished
 		// res is the result of the simulation
 		let index = this.results.length;
-		while(index < res.periods){
+		while(index < res.periods) {
 			let time = res.times[index];
 			this.simulationTime = res.times[index];
 			var currentRunResults = [];
 			currentRunResults.push(time);
 			for(let key in this.varIdList) {
-				if(key==0) {
+				if (key == 0) {
 					// On location 0 we always have time
 					continue;
 				}
@@ -4102,11 +5140,11 @@ class RunResults {
 		}
 	}
 	static resumeSimulation() {
-		$("#imgRunPauseTool").attr("src","graphics/pause.svg");
+		$("#imgRunPauseTool").attr("src", "graphics/pause.svg");
 		this.runState = runStateEnum.running;
 		// Simulation controller can only be null if the first pause event has never triggered
 		// In such a case it is enought to just change this.runState, otherwise we also have to trigger the controllers resume() function.
-		if(this.simulationController != null) {
+		if (this.simulationController != null) {
 			
 			this.simulationController.resume();
 			// We have a bug that happens some times on resume because simulationController is null
@@ -4114,12 +5152,12 @@ class RunResults {
 			//~ console.error(getStackTrace());
 		}
 	}
-	static runSimulation(){
+	static runSimulation() {
 		this.stopSimulation();
-		$("#imgRunPauseTool").attr("src","graphics/pause.svg");
+		$("#imgRunPauseTool").attr("src", "graphics/pause.svg");
 		this.createHeader();
 		// We can only take 100 iterations between every update to avoid the feeling of program freezing
-		if(getTimeLength()*getTimeStep() >= 100) {
+		if (getTimeLength()*getTimeStep() >= 100) {
 			// For long runs. Longer then 100
 			setPauseInterval(getTimeStep()*100);
 		} else {
@@ -4136,10 +5174,10 @@ class RunResults {
 				this.simulationController = res;
 				
 				// If still running continue with next cycle
-				if(this.runState == runStateEnum.running) {
+				if (this.runState == runStateEnum.running) {
 					this.updateProgressBar()
 					do_global_log("length "+this.results.length)
-					if(this.simulationController==null) {
+					if (this.simulationController == null) {
 						do_global_log("simulation controller is null")
 					}
 					this.continueRunSimulation()
@@ -4161,7 +5199,7 @@ class RunResults {
 	}
 	static continueRunSimulation() {
 		this.storeResults(this.simulationController);
-		if(this.updateCounter==0) {
+		if (this.updateCounter == 0) {
 			this.triggerRunFinished();
 			this.updateCounter = this.updateFrequency;
 		}
@@ -4170,7 +5208,7 @@ class RunResults {
 	}
 	static stepSimulation() {
 		/* experiment
-		if(this.runState == runStateEnum.running) {
+		if (this.runState == runStateEnum.running) {
 			this.resetSimulation();
 			this.simulationController = null;
 			this.runState = runStateEnum.stepping;
@@ -4178,7 +5216,7 @@ class RunResults {
 		}
 		*/
 		// if stepping was already started
-		if(this.simulationController!=null) {
+		if (this.simulationController != null) {
 			this.simulationController.resume();
 			return;
 		}
@@ -4211,12 +5249,15 @@ class RunResults {
 		const progressBarWidth = 98;
 		$("#runStatusBarOuter").width(progressBarWidth);
 		$("#runStatusBar").width(progressBarWidth*this.getRunProgressFraction());
-		$("#runStatusBarText").html(this.getRunProgress() + " / " + this.getRunProgressMax());
+		let currentTime = this.getRunProgress();
+		let endTime = this.getRunProgressMax();
+		let timeStep = Math.round(this.getTimeStep() * 1000) /1000;
+		$("#runStatusBarText").html(`${currentTime} / ${endTime} (${timeStep})`);
 		
 	}
 	static pauseSimulation() {
 		this.runState = runStateEnum.paused;
-		$("#imgRunPauseTool").attr("src","graphics/run.svg");
+		$("#imgRunPauseTool").attr("src", "graphics/run.svg");
 	}
 	static resetSimulation() {
 		this.stopSimulation();
@@ -4229,7 +5270,7 @@ class RunResults {
 		endRunningSimulation();
 		this.runState = runStateEnum.stopped;
 		this.simulationController = null;
-		$("#imgRunPauseTool").attr("src","graphics/run.svg");
+		$("#imgRunPauseTool").attr("src", "graphics/run.svg");
 		this.updateCounter = 0;
 	}
 	static subscribeRun(handler) {
@@ -4243,18 +5284,26 @@ class RunResults {
 	}
 	static getLastValue(primitiveId) {
 		let lastRow = this.getLastRow();
-		if(lastRow==null) {
+		if (lastRow == null) {
 			//~ alert("early return");
 			return null;
 		}	
 		let varIdIndex = this.varIdList.indexOf(Number(primitiveId));
 		return lastRow[varIdIndex];
 	}
+	static getTimeStep() {
+		if (this.results && 1 < this.results.length) {
+			return this.results[1][0]-this.results[0][0];
+		} else if (primitives("Setting")[0]) {
+			return primitives("Setting")[0].getAttribute("TimeStep");
+		}
+		return 0;
+	}
 	static getRunProgress() {
 		let lastRow = this.getLastRow();
 		// If we have no last row return null
-		if(lastRow==null) {
-			return 0;
+		if (lastRow == null && primitives("Setting")[0]) {
+			return primitives("Setting")[0].getAttribute("TimeStart");
 		}
 		// else return time
 		return lastRow[0];
@@ -4267,7 +5316,7 @@ class RunResults {
 	}
 	static getLastRow() {
 		//~ alert(this.results.length);
-		if(this.results.length!=0) {
+		if (this.results.length != 0) {
 			return this.results[this.results.length-1];
 		} else {
 			return null;
@@ -4278,18 +5327,18 @@ class RunResults {
 		varIdList = varIdList.map(Number);
 		
 		// Contains the indexes from this.results that we want to return
-		let selectedVarIdIndexes=[0]; // The first index is always 0 for time
+		let selectedVarIdIndexes = [0]; // The first index is always 0 for time
 		for(let i in varIdList) {
 			let varIdIndex = this.varIdList.indexOf(varIdList[i]);
 			selectedVarIdIndexes.push(varIdIndex);
 		}
 		do_global_log("this.varIdList "+JSON.stringify(this.varIdList)+" varIdList "+JSON.stringify(varIdList));
-		let returnResults=[];
+		let returnResults = [];
 		for(let row_index in this.results) {
 			let tmpRow = [];
 			for(let column_index in selectedVarIdIndexes) {
 				let wantedIndex = selectedVarIdIndexes[column_index];
-				if(wantedIndex!=-1) {
+				if (wantedIndex != -1) {
 					tmpRow.push(this.results[row_index][wantedIndex]);
 				} else {
 					tmpRow.push(null);
@@ -4303,25 +5352,25 @@ class RunResults {
 		let unfilteredResults = this.getSelectiveIdResults(varIdList);
 		let filteredResults = [];
 		let printInterval = step/getTimeStep();
-		let printCounter=1;
+		let printCounter = 1;
 		
 		for(let row_index in unfilteredResults) {
 			let time = unfilteredResults[row_index][0];
-			if(time < start) {
+			if (time < start) {
 				continue;
 			}
-			if(time == start) {
+			if (time == start) {
 				printCounter = printInterval;
 			}
-			if(time > length) {
+			if (time > start + length) {
 				// End of loop
 				return filteredResults;
 			}
-			if(printCounter<printInterval) {
+			if (printCounter<printInterval) {
 				printCounter++;
 				continue;
 			} else {
-				printCounter=1;
+				printCounter = 1;
 			}
 			filteredResults.push(unfilteredResults[row_index]);
 		}
@@ -4340,20 +5389,20 @@ class jqDialog {
 		// This is a static attribute that prevents delete key etc to be relevant when a dialog is open
 		jqDialog.blockingDialogOpen = false;
 	}
-	constructor(title=null,contentHTML=null,size=null) {
+	constructor(title = null, contentHTML = null, size = null) {
 		this.dialog = null;
 		
 		this.contentHTML = "Empty dialog";
 		this.title = "Title";
-		this.size=[600,400];
+		this.size = [600,400];
 		
-		if(contentHTML) {
+		if (contentHTML) {
 			this.contentHTML = contentHTML;
 		}
-		if(title) {
+		if (title) {
 			this.title = title;
 		}
-		if(size) {
+		if (size) {
 			this.size = size;
 		}
 		
@@ -4364,7 +5413,7 @@ class jqDialog {
 		
 		this.dialogDiv = document.createElement("div");
 		this.dialogDiv.setAttribute("title",this.title);
-		this.dialogDiv.style.display="none";
+		this.dialogDiv.style.display = "none";
 
 		this.dialogContent = document.createElement("div");
 		this.dialogContent.innerHTML=this.contentHTML;
@@ -4394,14 +5443,14 @@ class jqDialog {
 				this.beforeClose();
 			},
 			close: () => {
-				this.visible=false;
+				this.visible = false;
 				jqDialog.blockingDialogOpen = false;
 				this.afterClose();
 			},
 			width: this.size[0],
 			height: this.size[1],
 			open: ( event, ui ) => {
-				if(this.dialogParameters.modal) {
+				if (this.dialogParameters.modal) {
 					jqDialog.blockingDialogOpen = true;
 				}
 				
@@ -4415,19 +5464,23 @@ class jqDialog {
 			"Cancel":() => {
 				$(this.dialog).dialog('close');
 			},
-			"Apply":() =>
-			{
-				$(this.dialog).dialog('close');
-				// We add a delay to make sure we closed first
-				setTimeout(() => {
-					this.afterOkClose();
-				},200);
+			"Apply": () => {
+				this.applyChanges();
 			}
 		};
 		this.dialogParameters.width = "auto";
 		this.dialogParameters.height = "auto";
 		this.beforeCreateDialog();
-		this.dialog=$(this.dialogDiv).dialog(this.dialogParameters);
+		this.dialog = $(this.dialogDiv).dialog(this.dialogParameters);
+	}
+	applyChanges() {
+		$(this.dialog).dialog('close');
+		// We add a delay to make sure we closed first
+		setTimeout(() => {
+			this.afterOkClose();
+			History.storeUndoState();
+			updateInfoBar();
+		}, 200);
 	}
 	afterOkClose() {
 		
@@ -4491,7 +5544,7 @@ function getPrimitiveList() {
 }
 
 class XAlertDialog extends jqDialog {
-	constructor(message,closeHandler=null) {
+	constructor(message,closeHandler = null) {
 		super();
 		this.setTitle("Alert");
 		this.message = message;
@@ -4499,7 +5552,7 @@ class XAlertDialog extends jqDialog {
 		this.closeHandler = closeHandler;
 	}
 	afterClose() {
-		if(this.closeHandler) {
+		if (this.closeHandler) {
 			this.closeHandler();
 		}
 	}
@@ -4527,7 +5580,7 @@ class YesNoDialog extends jqDialog {
 		this.answer = "no";
 	}
 	afterClose() {
-		if(this.closeHandler) {
+		if (this.closeHandler) {
 			this.closeHandler(this.answer);
 		}
 	}
@@ -4535,12 +5588,12 @@ class YesNoDialog extends jqDialog {
 		this.dialogParameters.buttons = {
 			"Yes":() =>
 			{
-				this.answer="yes";
+				this.answer = "yes";
 				$(this.dialog).dialog('close');
 			},
 			"No":() =>
 			{
-				this.answer="no";
+				this.answer = "no";
 				$(this.dialog).dialog('close');
 			}
 		};
@@ -4561,7 +5614,7 @@ class YesNoCancelDialog extends jqDialog {
 		this.answer = "cancel";
 	}
 	afterClose() {
-		if(this.closeHandler) {
+		if (this.closeHandler) {
 			this.closeHandler(this.answer);
 		}
 	}
@@ -4569,17 +5622,17 @@ class YesNoCancelDialog extends jqDialog {
 		this.dialogParameters.buttons = {
 			"Yes":() =>
 			{
-				this.answer="yes";
+				this.answer = "yes";
 				$(this.dialog).dialog('close');
 			},
 			"No":() =>
 			{
-				this.answer="no";
+				this.answer = "no";
 				$(this.dialog).dialog('close');
 			},
 			"Cancel":() =>
 			{
-				this.answer="cancel";
+				this.answer = "cancel";
 				$(this.dialog).dialog('close');
 			}
 		};
@@ -4592,7 +5645,7 @@ function yesNoCancelAlert(message,closeHandler) {
 
 function saveChangedAlert(continueHandler) {
 	// If we have no unsaved changes we just continue directly	
-	if(!History.unsavedChanges) {
+	if (!History.unsavedChanges) {
 		continueHandler();
 		return;
 	}	
@@ -4618,12 +5671,12 @@ class DisplayDialog extends jqDialog {
 		super();
 		this.displayIdList = [];
 		this.subscribePool = new SubscribePool();
-		this.acceptedPrimitveTypes=["Stock","Flow","Variable","Converter"];
+		this.acceptedPrimitveTypes = ["Stock", "Flow", "Variable", "Converter"];
 	}
 	
 	clearRemovedIds() {
 		for(let id of this.displayIdList) {
-			if(findID(id)==null) {
+			if (findID(id) == null) {
 				this.setDisplayId(id,false);
 			}
 		}
@@ -4633,7 +5686,7 @@ class DisplayDialog extends jqDialog {
 		let results = [];
 		let primitiveList = getPrimitiveList();
 		for(let primitive of primitiveList) {
-			if(this.acceptsId(primitive.id)) {
+			if (this.acceptsId(primitive.id)) {
 				results.push(primitive);
 			}
 		}
@@ -4642,7 +5695,7 @@ class DisplayDialog extends jqDialog {
 	
 	acceptsId(id) {
 		let type = getType(findID(id));
-		return (this.acceptedPrimitveTypes.indexOf(type)!=-1);
+		return (this.acceptedPrimitveTypes.indexOf(type) != -1);
 	}
 	
 	setDisplayId(id,value) {
@@ -4650,11 +5703,11 @@ class DisplayDialog extends jqDialog {
 		switch(value) {
 			case true:
 				// Check that the id can be added
-				if(!this.acceptsId(id)) {
+				if (!this.acceptsId(id)) {
 					return;
 				}
 				// Check if id already in this.displayIdList
-				if(oldIdIndex!=-1) {
+				if (oldIdIndex != -1) {
 					return;
 				}
 				// Add the value
@@ -4663,7 +5716,7 @@ class DisplayDialog extends jqDialog {
 			break;
 			case false:
 				// Check if id is not in the list
-				if(oldIdIndex==-1) {
+				if (oldIdIndex == -1) {
 					return;
 				}				
 				this.displayIdList.splice(oldIdIndex,1);
@@ -4672,8 +5725,8 @@ class DisplayDialog extends jqDialog {
 	}
 	
 	getDisplayId(id) {
-		id=id.toString();
-		if(this.displayIdList.indexOf(id)==-1) {
+		id = id.toString();
+		if (this.displayIdList.indexOf(id) == -1) {
 			return false;
 		} else {
 			return true;
@@ -4697,22 +5750,42 @@ class DisplayDialog extends jqDialog {
 		// We store the selected variables inside the dialog
 		// The dialog is owned by the table to which it belongs
 		let primitives = this.getAcceptedPrimitiveList();
-		return `
-		<table>
-		<tr>
-			${primitives.map(p => '<tr><td class="text">'+makePrimitiveName(getName(p))+'</td><td><input class="primitive_checkbox" type="checkbox" '+checkedHtmlAttribute(this.getDisplayId(getID(p)))+' data-name="'+getName(p)+'" data-id="'+getID(p)+'"></td></tr>').join('')}
-		</tr>
-		</table>`;
+		
+		return (`
+			<table style="margin: 16px 0px;">
+			<tr>
+				${primitives.map(p => `
+					<tr>
+						<td class="text">
+							${makePrimitiveName(getName(p))} 
+						</td>
+						<td>
+							<input 
+								class="primitive_checkbox" 
+								type="checkbox" 
+								${checkedHtmlAttribute(this.getDisplayId(getID(p)))} 
+								data-name="${getName(p)}" 
+								data-id="${getID(p)}"
+							>
+						</td>
+					</tr>
+				`).join('')}
+			</tr>
+			</table>
+		`);
 	}
-	beforeShow() {
-		this.setHtml(this.renderPrimitiveListHtml());
+	bindPrimitiveListEvents() {
 		$(this.dialogContent).find(".primitive_checkbox").click((event) => {
 			let clickedElement = event.target;
-			let idClicked=$(clickedElement).attr("data-id");
-			let checked=$(clickedElement).prop("checked");
+			let idClicked = $(clickedElement).attr("data-id");
+			let checked = $(clickedElement).prop("checked");
 			this.setDisplayId(idClicked,checked);
 			this.subscribePool.publish("primitive check changed");
 		});
+	}
+	beforeShow() {
+		this.setHtml(this.renderPrimitiveListHtml());
+		this.bindPrimitiveListEvents();
 	}
 }
 
@@ -4721,6 +5794,8 @@ class DiagramDialog extends DisplayDialog {
 		super();
 		this.setTitle("Diagram properties");
 		
+		this.markers = false;
+
 		this.xMin = 0;
 		this.xMax = 0;
 		this.xAuto  = true;
@@ -4734,13 +5809,10 @@ class DiagramDialog extends DisplayDialog {
 		
 		this.simulationTime = 0;
 	}
-	beforeShow() {
-		// We store the selected variables inside the dialog
-		// The dialog is owned by the table to which it belongs
-		let primitives = this.getAcceptedPrimitiveList();
-		let contentHTML = this.renderPrimitiveListHtml()+`
-		<br/><br/>
-		<table>
+
+	renderAxisLimitsHTML() {
+		return (`
+		<table style="margin: 16px 0px;">
 			<tr>
 				<th></th>
 				<th>Min</th>
@@ -4760,27 +5832,31 @@ class DiagramDialog extends DisplayDialog {
 				<td><input class="yAuto intervalsettings" type="checkbox" ${checkedHtmlAttribute(this.yAuto)}></td>
 			</tr>
 		</table>
-		`;
-		this.setHtml(contentHTML);
-		$(this.dialogContent).find(".primitive_checkbox").click((event) => {
-			let clickedElement = event.target;
-			let idClicked=$(clickedElement).attr("data-id");
-			let checked=$(clickedElement).prop("checked");
-			this.setDisplayId(idClicked,checked);
-			this.subscribePool.publish("primitive check changed");
-		});
-		
-		
+		`);
+	}
+
+	bindAxisLimitsEvents() {
 		$(this.dialogContent).find(".intervalsettings").change((event) => {
 			this.updateInterval();
 		});
+	}
+
+	beforeShow() {
+		// We store the selected variables inside the dialog
+		// The dialog is owned by the table to which it belongs
+
+		let contentHTML = this.renderPrimitiveListHtml() + this.renderAxisLimitsHTML();
+		this.setHtml(contentHTML);
+		
+		this.bindPrimitiveListEvents();
+		this.bindAxisLimitsEvents();
 		
 		this.updateInterval();
 	}
 	updateInterval() {
-		this.xMin=Number($(this.dialogContent).find(".xMin").val());
-		this.xMax=Number($(this.dialogContent).find(".xMax").val());
-		this.xAuto=$(this.dialogContent).find(".xAuto").prop("checked");
+		this.xMin = Number($(this.dialogContent).find(".xMin").val());
+		this.xMax = Number($(this.dialogContent).find(".xMax").val());
+		this.xAuto = $(this.dialogContent).find(".xAuto").prop("checked");
 		
 		$(this.dialogContent).find(".xMin").prop("disabled",this.xAuto);
 		$(this.dialogContent).find(".xMax").prop("disabled",this.xAuto);
@@ -4789,9 +5865,9 @@ class DiagramDialog extends DisplayDialog {
 		$(this.dialogContent).find(".xMax").val(this.getXMax());
 		
 		
-		this.yMin=Number($(this.dialogContent).find(".yMin").val());
-		this.yMax=Number($(this.dialogContent).find(".yMax").val());
-		this.yAuto=$(this.dialogContent).find(".yAuto").prop("checked");
+		this.yMin = Number($(this.dialogContent).find(".yMin").val());
+		this.yMax = Number($(this.dialogContent).find(".yMax").val());
+		this.yAuto = $(this.dialogContent).find(".yAuto").prop("checked");
 		
 		$(this.dialogContent).find(".yMin").prop("disabled",this.yAuto);
 		$(this.dialogContent).find(".yMax").prop("disabled",this.yAuto);
@@ -4800,30 +5876,30 @@ class DiagramDialog extends DisplayDialog {
 		$(this.dialogContent).find(".yMax").val(this.getYMax());
 	}
 	getXMin() {
-		if(this.xAuto) {
+		if (this.xAuto) {
 			return getTimeStart();
 		} else {
 			return this.xMin;
 		}
 	}
 	getXMax() {
-		if(this.xAuto) {
+		if (this.xAuto) {
 			// Uncomment if you want the diagram to grow dynamicly as more data is produced
 			//~ return this.simulationTime;
-			return getTimeLength()
+			return getTimeStart() + getTimeLength();
 		} else {
 			return this.xMax;
 		}
 	}
 	getYMin() {
-		if(this.yAuto) {
+		if (this.yAuto) {
 			return this.minValue;
 		} else {
 			return this.yMin;
 		}
 	}
 	getYMax() {
-		if(this.yAuto) {
+		if (this.yAuto) {
 			return this.maxValue;
 		} else {
 			return this.yMax;
@@ -4835,7 +5911,10 @@ class XyPlotDialog extends DiagramDialog {
 	constructor() {
 		super();
 		this.setTitle("XY-plot properties");
-		
+
+		this.markersChecked = false;
+		this.lineChecked = true;
+
 		this.xMin = 0;
 		this.xMax = 0;
 		this.xAuto  = true;
@@ -4851,29 +5930,94 @@ class XyPlotDialog extends DiagramDialog {
 		this.maxYValue = 0;
 	}
 	
+	renderMarkerRadioHTML() {
+		return (`
+			<table style=" float: right; margin: 16px 16px; text-align: left;">
+				<tr>
+				<td style="text-align: left">
+						Line
+					</td>	
+					<td>
+						<input type="checkbox" name="displayType" class="line">
+					</td>
+					
+				</tr>
+				<tr>
+					<td style="text-align: left">
+						Markers
+					</td>
+					<td>
+						<input type="checkbox" name="displayType" class="markers">
+					</td>
+				</tr>
+			</table>
+		`);
+	}
+
+	beforeShow() {
+		// We store the selected variables inside the dialog
+		// The dialog is owned by the table to which it belongs
+
+		let contentHTML = this.renderMarkerRadioHTML();
+		contentHTML += this.renderPrimitiveListHtml();
+		contentHTML += this.renderAxisLimitsHTML();
+		this.setHtml(contentHTML);
+		
+		this.bindPrimitiveListEvents();
+		this.bindAxisLimitsEvents();
+		this.bindMarkersHTML();
+
+		this.updateInterval();
+	}
+
+	bindMarkersHTML() {
+		$(this.dialogContent).find(".line").change((event) => {
+			this.lineChecked = event.target.checked;
+			this.updateInterval();
+		});
+		$(this.dialogContent).find(".markers").change((event) => {
+			this.markersChecked = event.target.checked;
+			this.updateInterval();
+		});
+	}
+
+	isMarkersChecked() {
+		return this.markersChecked;
+	}
+
+	isLineChecked() {
+		return this.lineChecked;
+	}
+
+	updateInterval() {
+		super.updateInterval();
+		$(this.dialogContent).find(".line")[0].checked = this.lineChecked;
+		$(this.dialogContent).find(".markers")[0].checked = this.markersChecked;
+	}
+
 	getXMin() {
-		if(this.xAuto) {
+		if (this.xAuto) {
 			return this.minXValue;
 		} else {
 			return this.xMin;
 		}
 	}
 	getXMax() {
-		if(this.xAuto) {
+		if (this.xAuto) {
 			return this.maxXValue;
 		} else {
 			return this.xMax;
 		}
 	}
 	getYMin() {
-		if(this.yAuto) {
+		if (this.yAuto) {
 			return this.minYValue;
 		} else {
 			return this.yMin;
 		}
 	}
 	getYMax() {
-		if(this.yAuto) {
+		if (this.yAuto) {
 			return this.maxYValue;
 		} else {
 			return this.yMax;
@@ -4885,85 +6029,89 @@ class TableDialog extends DisplayDialog {
 	constructor() {
 		super();
 		this.start = getTimeStart();
-		this.end = getTimeLength() - getTimeStart();
+		//this.end = getTimeLength() + getTimeStart();
+		this.length = getTimeLength();
 		this.step = getTimeStep();
 		this.setTitle("Table properties");
 		
 		this.startAuto  = true;
-		this.endAuto = true;
+		this.lengthAuto = true;
 		this.stepAuto = true;
+	}
+	renderTableLimitsHTML() {
+		return (`
+		<table style="margin: 16px 0px;">
+			<tr>
+				<td class="text">Start Time</td>
+				<td><input class="intervalsettings start" name="start" value="${this.start}" type="text"></td>
+				<td>Auto <input class="intervalsettings start_auto" type="checkbox"  ${checkedHtmlAttribute(this.startAuto)}/></td>
+			</tr><tr>
+				<td class="text">Length</td>
+				<td><input class="intervalsettings length" name="length" value="${this.length}" type="text"></td>
+				<td>Auto <input class="intervalsettings length_auto" type="checkbox"  ${checkedHtmlAttribute(this.lengthAuto)}/></td>
+			</tr><tr>
+				<td class="text">Time Step</td>
+				<td><input class="intervalsettings step" name="step" value="${this.step}" type="text"></td>
+				<td>Auto <input class="intervalsettings step_auto" type="checkbox"  ${checkedHtmlAttribute(this.stepAuto)}/></td>
+			</tr>
+		</table>
+		`);
+
 	}
 	beforeShow() {
 		// We store the selected variables inside the dialog
 		// The dialog is owned by the table to which it belongs
 		let primitives = this.getAcceptedPrimitiveList();
-		let contentHTML = this.renderPrimitiveListHtml()+`
-		<br/><br/>
-		<table>
-		<tr>
-			<td class="text">From</td>
-			<td><input class="intervalsettings start" name="start" value="${this.start}" type="text"></td>
-			<td>Auto <input class="intervalsettings start_auto" type="checkbox"  ${checkedHtmlAttribute(this.startAuto)}/></td>
-		</tr><tr>
-			<td class="text">To</td>
-
-			<td><input class="intervalsettings end" name="end" value="${this.end}" type="text"></td>
-			<td>Auto <input class="intervalsettings end_auto" type="checkbox"  ${checkedHtmlAttribute(this.endAuto)}/></td>
-		</tr><tr>
-			<td class="text">Step</td>
-			<td><input class="intervalsettings step" name="step" value="${this.step}" type="text"></td>
-			<td>Auto <input class="intervalsettings step_auto" type="checkbox"  ${checkedHtmlAttribute(this.stepAuto)}/></td>
-		</tr>
-		</table>
-		`;
+		let contentHTML = this.renderPrimitiveListHtml()+this.renderTableLimitsHTML();
 		this.setHtml(contentHTML);
-		$(this.dialogContent).find(".primitive_checkbox").click((event) => {
-			let clickedElement = event.target;
-			let idClicked=$(clickedElement).attr("data-id");
-			let checked=$(clickedElement).prop("checked");
-			this.setDisplayId(idClicked,checked);
-			this.subscribePool.publish("primitive check changed");
-		});
+		
+		this.bindPrimitiveListEvents();
 		$(this.dialogContent).find(".intervalsettings").change((event) => {
 			this.updateInterval();
 		});
 		this.updateInterval();
 	}
 	updateInterval()  {
-		this.start=Number($(this.dialogContent).find(".start").val());
-		this.end=Number($(this.dialogContent).find(".end").val());
-		this.step=Number($(this.dialogContent).find(".step").val());
+		this.start = Number($(this.dialogContent).find(".start").val());
+		this.length = Number($(this.dialogContent).find(".length").val());
+		this.step = Number($(this.dialogContent).find(".step").val());
 		
 		this.startAuto = $(this.dialogContent).find(".start_auto").prop("checked");
 		$(this.dialogContent).find(".start").prop("disabled",this.startAuto);
 		$(this.dialogContent).find(".start").val(this.getStart());
 		
-		this.endAuto = $(this.dialogContent).find(".end_auto").prop("checked");
-		$(this.dialogContent).find(".end").prop("disabled",this.endAuto);
-		$(this.dialogContent).find(".end").val(this.getEnd());
+		this.lengthAuto = $(this.dialogContent).find(".length_auto").prop("checked");
+		$(this.dialogContent).find(".length").prop("disabled", this.lengthAuto);
+		$(this.dialogContent).find(".length").val(this.getLength());
 		
 		this.stepAuto = $(this.dialogContent).find(".step_auto").prop("checked");
 		$(this.dialogContent).find(".step").prop("disabled",this.stepAuto);
 		$(this.dialogContent).find(".step").val(this.getStep());
 	}
 	getStart() {
-		if(this.startAuto) {
+		if (this.startAuto) {
+			// Fetch from IM engine
 			return getTimeStart();
 		} else {
+			// Fetch from user input
 			return this.start;
 		}
 	}
-	getEnd() {
-		if(this.endAuto) {
-			return getTimeLength()-getTimeStart();
+	getLength() {
+		if (this.LengthAuto) {
+			// Fetch from IM engine
+			return getTimeLength();
 		} else {
+			// Fetch from user input
 			return this.end;
 		}
 	}
 	getStep() {
-		if(this.stepAuto) {
+		if (this.stepAuto) {
+			// Fetch from IM engine
 			return getTimeStep();
 		} else {
+			// Fetch from user input
 			return this.step;
 		}
 	}
@@ -4972,23 +6120,23 @@ class TableDialog extends DisplayDialog {
 class SimulationSettings extends jqDialog {
 	constructor() {
 		super();
-		this.setTitle("Simulation setttings");
+		this.setTitle("Simulation settings");
 		
 	}
 	beforeShow() {
-		let start=getTimeStart();
+		let start = getTimeStart();
 		let length = getTimeLength();
 		let step = getTimeStep();
 		this.setHtml(`
 			<table>
 			<tr>
-				<td>Start</td>
+				<td>Start Time</td>
 				<td><input class="input_start" name="start" value="${start}" type="text"></td>
 			</tr><tr>
 				<td>Length</td>
 				<td><input class="input_length" name="length" value="${length}" type="text"></td>
 			</tr><tr>
-				<td>Step</td>
+				<td>Time Step</td>
 				<td><input class="input_step" name="step" value="${step}" type="text"></td>
 			</tr>
 			</table>
@@ -5011,7 +6159,7 @@ class NumberBoxDialog extends jqDialog {
 		super();
 		this.setTitle("Info");
 		let imPrimitive = findID(id);
-		if(imPrimitive) {
+		if (imPrimitive) {
 			let primitiveName = makePrimitiveName(getName(imPrimitive));
 			this.setHtml(`
 				Value of ${primitiveName}
@@ -5059,15 +6207,27 @@ class ConverterDialog extends jqDialog {
 			</div>
 		`);
 		this.valueField = $(this.dialogContent).find(".valueField").get(0);
+		$(this.valueField).keydown((event) => {
+			if (! event.shiftKey) {
+				if (event.keyCode == keyboard["enter"]) {
+					this.applyChanges();
+				}
+			}
+		});
 		this.nameField = $(this.dialogContent).find(".nameField").get(0);
+		$(this.nameField).keydown((event) => {
+			if (event.keyCode == keyboard["enter"]) {
+				this.applyChanges();
+			}
+		});
 	}
-	open(id,defaultFocusSelector=null) {
-		if(jqDialog.blockingDialogOpen) {
+	open(id,defaultFocusSelector = null) {
+		if (jqDialog.blockingDialogOpen) {
 			// We can't open a new dialog while one is already open
 			return;
 		}
 		this.primitive = findID(id);
-		if(this.primitive == null) {
+		if (this.primitive == null) {
 			alert("Primitive with id "+id+" does not exist");
 			return;
 		}
@@ -5082,7 +6242,7 @@ class ConverterDialog extends jqDialog {
 		$(this.nameField).val(oldName);
 		$(this.valueField).val(oldValue);
 		
-		if(this.defaultFocusSelector) {
+		if (this.defaultFocusSelector) {
 			let valueFieldDom = $(this.dialogContent).find(this.defaultFocusSelector).get(0);
 			valueFieldDom.focus();
 		}
@@ -5093,7 +6253,7 @@ class ConverterDialog extends jqDialog {
 		field.setSelectionRange(0, inputLength);
 	}
 	afterOkClose() {
-		if(this.primitive) {
+		if (this.primitive) {
 			// Handle value
 			let value = $(this.valueField).val();
 			value = value.replace(/\n/g, "\\n");
@@ -5106,17 +6266,15 @@ class ConverterDialog extends jqDialog {
 	}
 }
 
-var global_log = "";
-
 function global_log_update() {
-	var log="";
-	log+="<br/>";
-	log+=global_log+"<br/>";
+	var log = "";
+	log += "<br/>";
+	log += global_log+"<br/>";
 	$(".log").html(log);
 }
 
 function do_global_log(line) {
-	global_log=line+"; "+(new Date()).getMilliseconds()+"<br/>"+global_log;
+	global_log = line+"; "+(new Date()).getMilliseconds()+"<br/>"+global_log;
 	global_log_update();
 }
 
@@ -5128,7 +6286,7 @@ class DebugDialog extends jqDialog {
 		this.setTitle("Debug");
 		this.setHtml(`
 			<div id="log_panel" style="z-index: 10; position: absolute; left: 0px; top: 0px; height: 90%; overflow-x: visible">
-				This windows is only for developers of StochSD. If you are not developing StochSD you probably dont need this.<br/>
+				This windows is only for developers of StochSim. If you are not developing StochSim you probably dont need this.<br/>
 				<button class="btn_clear_log">clear</button>
 				<div class="log" style="width: 100%; height: 90%; overflow-y: scroll;">
 				</div>
@@ -5136,7 +6294,7 @@ class DebugDialog extends jqDialog {
 		`);
 
 		$(this.dialogContent).find(".btn_clear_log").click((event) => {
-			global_log="";
+			global_log = "";
 			global_log_update();
 		});
 	}
@@ -5146,7 +6304,6 @@ class DebugDialog extends jqDialog {
 		this.dialogParameters.height = 400;
 	}
 }
-
 
 class AboutDialog extends jqDialog {
 	constructor() {
@@ -5199,7 +6356,6 @@ class EquationEditor extends jqDialog {
     <div style="overflow-y: scroll; width: 300px; height: 300px; padding:  10px 20px 20px 0px;">
 	<div class="accordionCluster">
 
-
 	</div> <!--End of accordionCluster. Programming help is inserted here-->
 		
     
@@ -5209,14 +6365,26 @@ class EquationEditor extends jqDialog {
 		`);
 
 		this.valueField = $(this.dialogContent).find(".valueField").get(0);
+		$(this.valueField).keydown((event) => {
+			if (! event.shiftKey) {
+				if (event.keyCode == keyboard["enter"]) {
+					this.applyChanges();
+				}
+			}
+		});
+		
 		this.nameField = $(this.dialogContent).find(".nameField").get(0);
+		$(this.nameField).keydown((event) => {
+			if (event.keyCode == keyboard["enter"]) {
+				this.applyChanges();
+			}
+		})
+
 		this.referenceDiv = $(this.dialogContent).find(".referenceDiv").get(0);
 		this.restrictPositiveCheckbox = $(this.dialogContent).find(".restrictPositive").get(0);
 		this.positiveOnlyDiv = $(this.dialogContent).find(".positiveOnlyDiv").get(0);
 		
 		let helpData = getFunctionHelpData();
-
-
 	
 		let functionListToHtml = function(functionList) {
 			let filterFunctionTemplate = (functionTemplate)=> {
@@ -5227,9 +6395,9 @@ class EquationEditor extends jqDialog {
 			let codeTemplate = "";
 			let codeHelp = "";
 			for (let j = 0; j < functionList.length; j++) {
-				let example="";
-				if(functionList[j].length==4) {
-					if((functionList[j][3]).constructor === Array) {
+				let example = "";
+				if (functionList[j].length == 4) {
+					if ((functionList[j][3]).constructor === Array) {
 						let codeSample = functionList[j][3][0];
 						let returnValue = functionList[j][3][1];
 						example = `<br/><br/><b>Example</b><br/>${codeSample}<br/><br/><b>Returns:</b><br/> ${returnValue}`;
@@ -5245,7 +6413,7 @@ class EquationEditor extends jqDialog {
 				codeHelp = codeHelp.replace(/\"/g, "&#34;");
 				result += `<li class = "functionHelp clickFunction" data-template="${codeTemplate}" title="${codeHelp}">${codeSnippetName}</li>`;
 			}
-			result+="</ul>";
+			result += "</ul>";
 			return result;
 		};
 	
@@ -5281,7 +6449,7 @@ class EquationEditor extends jqDialog {
 		});
 		
 		
-		if(this.defaultFocusSelector) {
+		if (this.defaultFocusSelector) {
 			let valueFieldDom = $(this.dialogContent).find(this.defaultFocusSelector).get(0);
 			valueFieldDom.focus();
 			var inputLength = valueFieldDom.value.length;  
@@ -5290,13 +6458,13 @@ class EquationEditor extends jqDialog {
 		}
 	
 	}
-	open(id,defaultFocusSelector=null) {
-		if(jqDialog.blockingDialogOpen) {
+	open(id,defaultFocusSelector = null) {
+		if (jqDialog.blockingDialogOpen) {
 			// We can't open a new dialog while one is already open
 			return;
 		}
 		this.primitive = findID(id);
-		if(this.primitive == null) {
+		if (this.primitive == null) {
 			alert("Primitive with id "+id+" does not exist");
 			return;
 		}
@@ -5319,7 +6487,7 @@ class EquationEditor extends jqDialog {
 		
 		
 		// Handle restrict to positive
-		if(["Flow","Stock"].indexOf(getType(this.primitive))!=-1) {
+		if (["Flow", "Stock"].indexOf(getType(this.primitive)) != -1) {
 			// If element has restrict to positive
 			$(this.positiveOnlyDiv).show();
 			let restrictPositive = getNonNegative(this.primitive);
@@ -5333,11 +6501,11 @@ class EquationEditor extends jqDialog {
 		let referenceList = getLinkedPrimitives(this.primitive);
 	
 		// Sort reference list by name
-		referenceList.sort(function(a, b){
+		referenceList.sort(function(a, b) {
 			let nameA = getName(a);
 			let nameB = getName(b);
-			if(nameA < nameB) return -1;
-			if(nameA > nameB) return 1;
+			if (nameA < nameB) return -1;
+			if (nameA > nameB) return 1;
 			return 0;
 		})
 		
@@ -5351,7 +6519,7 @@ class EquationEditor extends jqDialog {
 		}
 		
 		let referenceHTML = "";
-		if(referenceList.length > 0) {
+		if (referenceList.length > 0) {
 			referenceHTML = "Linked primitives: <br/>"+referenceListToHtml(referenceList);
 		} else {
 			referenceHTML = "No linked primitives";
@@ -5360,7 +6528,7 @@ class EquationEditor extends jqDialog {
 		
 		$(this.referenceDiv).find(".clickFunction").click((event) => this.templateClick(event));
 		
-		if(this.defaultFocusSelector) {
+		if (this.defaultFocusSelector) {
 			let valueFieldDom = $(this.dialogContent).find(this.defaultFocusSelector).get(0);
 			valueFieldDom.focus();
 			var inputLength = valueFieldDom.value.length;  
@@ -5395,21 +6563,21 @@ class EquationEditor extends jqDialog {
 	afterShow() {
 		// Building the accordion must be done while the window is visible for accordions to work correctly
 		// We therefor build it the first time the dialog is shown and store it in this.accordionBuilt
-		if(!this.accordionBuilt) {
+		if (!this.accordionBuilt) {
 			this.buildAccordion();
 			this.accordionBuilt = true;
 		}
 	}
 	storeValueSelectionRange() {
-		this.valueSelectionStart=this.valueField.selectionStart;
-		this.valueSelectionEnd=this.valueField.selectionEnd;
+		this.valueSelectionStart = this.valueField.selectionStart;
+		this.valueSelectionEnd = this.valueField.selectionEnd;
 	}
 	restoreValueSelectionRange() {
 		$(this.valueField).focus();
 		this.valueField.setSelectionRange(this.valueField.selectionStart,this.valueField.selectionEnd);
 	}
 	afterOkClose() {
-		if(this.primitive) {
+		if (this.primitive) {
 			// Handle value
 			let value = $(this.dialogContent).find(".valueField").val();
 			value = value.replace(/\n/g, "\\n");
@@ -5442,7 +6610,7 @@ class MacroDialog extends jqDialog {
 		this.setHtml(`
 		<textarea class="macroText"></textarea>
 		`);		
-		this.macroTextArea=$(this.dialogContent).find(".macroText");
+		this.macroTextArea =$(this.dialogContent).find(".macroText");
 	}
 	beforeShow() {
 		let oldMacro = getMacros();
@@ -5461,8 +6629,8 @@ class MacroDialog extends jqDialog {
 		this.macroTextArea.height(height-20);
 	}
 	beforeCreateDialog() {
-		this.dialogParameters.width="500";
-		this.dialogParameters.height="400";
+		this.dialogParameters.width = "500";
+		this.dialogParameters.height = "400";
 	}
 	afterOkClose() {
 		let newMacro = $(this.dialogContent).find(".macroText").val();
@@ -5478,7 +6646,7 @@ class TextAreaDialog extends jqDialog {
 		this.setHtml(`
 		<textarea class="text"></textarea>
 		`);		
-		this.textArea=$(this.dialogContent).find(".text");
+		this.textArea = $(this.dialogContent).find(".text");
 	}
 	beforeShow() {
 		let oldText = getName(this.primitive);
@@ -5497,8 +6665,8 @@ class TextAreaDialog extends jqDialog {
 		this.textArea.height(height-20);
 	}
 	beforeCreateDialog() {
-		this.dialogParameters.width="500";
-		this.dialogParameters.height="400";
+		this.dialogParameters.width = "500";
+		this.dialogParameters.height = "400";
 	}
 	afterOkClose() {
 		let newText = $(this.dialogContent).find(".text").val();
@@ -5527,8 +6695,8 @@ class EquationListDialog extends jqDialog {
 		let htmlOut = "";
 		
 		let Stocks = primitives("Stock");
-		if(Stocks.length > 0) {
-		htmlOut+=`
+		if (Stocks.length > 0) {
+		htmlOut += `
 		<h3 class="equationListHeader">Stocks</h3>
 			<table>
 				<tr><th>Name</th><td>Initial value</td></tr>
@@ -5538,8 +6706,8 @@ class EquationListDialog extends jqDialog {
 		}
 		
 		let Flows = primitives("Flow");
-		if(Flows.length > 0) {
-		htmlOut+=`
+		if (Flows.length > 0) {
+		htmlOut += `
 		<h3 class="equationListHeader">Flows</h3>
 			<table>
 				<tr><th>Name</th><td>Rate</td></tr>
@@ -5549,8 +6717,8 @@ class EquationListDialog extends jqDialog {
 		}
 		
 		let Variables = primitives("Variable");
-		if(Variables.length > 0) {
-		htmlOut+=`
+		if (Variables.length > 0) {
+		htmlOut += `
 		<h3 class="equationListHeader">Variables</h3>
 			<table>
 				<tr><th>Name</th><td>Value</td></tr>
@@ -5559,20 +6727,19 @@ class EquationListDialog extends jqDialog {
 		`;
 		}
 		let numberOfPrimitives = Stocks.length+Flows.length+Variables.length;
-		if(numberOfPrimitives == 0) {
+		if (numberOfPrimitives == 0) {
 			this.setHtml("This model is emptry. Build a model to show equation list");	
 			return;		
 		}
-		htmlOut+="<br/>Total of "+numberOfPrimitives+" primitives";
+		htmlOut += "<br/>Total of "+numberOfPrimitives+" primitives";
 		this.setHtml(htmlOut);
 	}
 }
 
-
 // Override the message function used by the insight maker engine so that we can catch error popups
-if(typeof mxUtils == "undefined") {
+if (typeof mxUtils == "undefined") {
 	window.mxUtils = {};
-	window.mxUtils.alert=function(message,closeHandler) {
+	window.mxUtils.alert = function(message,closeHandler) {
 		xAlert("Message from engine:  "+message,closeHandler);
 	}
 }

@@ -43,7 +43,7 @@ class nwController{
 		let params = this.getParams();
 		if(params.length >= 1) {
 			let parameterFilename = params[0];
-			fileManager.loadFromCommandLine(parameterFilename);
+			fileManager.loadFromFile(parameterFilename);
 		}
 		
 		var ngui = this.unsafeGetGui();
@@ -53,7 +53,7 @@ class nwController{
 		nwjsWindow = nwin;
 		nwjsApp = app;
 
-		// This save before closing handler only works when we run without StochSD tools.
+		// This save before closing handler only works when we run without StochSim tools.
 		// Otherwise it makes it impossible to quit
 		nwin.on("close",function(event) {
 			quitQuestion();
@@ -141,7 +141,7 @@ class BaseFileManager {
 	constructor() {
 		this._fileName = "";
 		this.lastSaved = null;
-		this.softwareName = "StochSD";
+		this.softwareName = "StochSim";
 	}
 	// This is executed when the document is ready
 	ready() {
@@ -169,6 +169,9 @@ class BaseFileManager {
 		RunResults.resetSimulation();
 	}
 	hasSaveAs() {
+		return false;
+	}
+	hasRecentFiles() {
 		return false;
 	}
 	saveModelAs() {
@@ -233,7 +236,7 @@ class BaseFileManager {
 class WebFileManager extends BaseFileManager {
 	constructor() {
 		super();
-		this.softwareName = "StochSD Web";
+		this.softwareName = "StochSim Web";
 	}
 	download(fileName, data) {
 		// Create Blob and attach it to ObjectURL
@@ -297,7 +300,7 @@ class WebFileManager extends BaseFileManager {
 class NwFileManager extends BaseFileManager {
 	constructor() {
 		super();
-		this.softwareName = "StochSD Desktop";
+		this.softwareName = "StochSim Desktop";
 	}
 	
 	// This is executed when the document is ready
@@ -317,6 +320,10 @@ class NwFileManager extends BaseFileManager {
 					do_global_log("NW: reader.onload callback");
 					var fileData = reader_event.target.result;
 					History.forceCustomUndoState(fileData);
+					
+					// Add to localStorage.recentFiles
+					this.addToRecent(this.fileName);
+
 					this.updateTitle();
 					preserveRestart();
 				}
@@ -336,6 +343,10 @@ class NwFileManager extends BaseFileManager {
 				this.fileName = this.appendFileExtension(file.path,InsightMakerFileExtension);
 				let fileData = createModelFileData();
 				this.writeFile(this.fileName,fileData);
+				
+				// adds to file localStorage.recentFiles list
+				this.addToRecent(this.fileName);
+				
 				this.updateSaveTime();
 				this.updateTitle();
 				if(this.finishedSaveHandler) {
@@ -349,6 +360,25 @@ class NwFileManager extends BaseFileManager {
 	}
 	hasSaveAs() {
 		return true;
+	}
+	hasRecentFiles() {
+		return true;
+	}
+	addToRecent(filePath) {
+		let limit = 5;
+		let recentFiles = [];
+		if (localStorage.recentFiles) {
+			recentFiles = JSON.parse(localStorage.recentFiles);
+		}
+		if (recentFiles.includes(filePath)) {
+			let index = recentFiles.indexOf(filePath);
+			recentFiles.splice(index, 1);
+		}
+		if (recentFiles.length <= limit) {
+			recentFiles.splice(limit-1);
+		}
+		recentFiles.unshift(filePath);
+		localStorage.setItem("recentFiles", JSON.stringify(recentFiles));
 	}
 	writeFile(fileName,FileData) {
 		do_global_log("NW: In write file");
@@ -378,6 +408,7 @@ class NwFileManager extends BaseFileManager {
 		this.writeFile(this.fileName,fileData);
 		this.updateSaveTime();
 		this.updateTitle();
+		this.addToRecent(this.fileName);
 	}
 	saveModelAs() {
 		do_global_log("NW: save model as ... triggered");
@@ -395,7 +426,7 @@ class NwFileManager extends BaseFileManager {
 		// The following line seems to cause a flicky bug
 		//~ uploader.parentElement.removeChild(uploader);
 	}
-	loadFromCommandLine(fileName) {
+	loadFromFile(fileName) {
 		var fs = require('fs')
 		var resolve = require('path').resolve;
 		var absoluteFileName = resolve(fileName);
@@ -409,11 +440,12 @@ class NwFileManager extends BaseFileManager {
 			this.fileName = absoluteFileName;
 			this.loadModelData(data);	
 			this.updateTitle();
+			this.addToRecent(this.fileName);
 		});
 	}
 }
 
-class Environment {
+class BaseEnvironment {
 	constructor() {
 		this.reloadingStarted = false;
 	}
@@ -428,7 +460,7 @@ class Environment {
 	}
 }
 
-class WebEnvironment extends Environment {
+class WebEnvironment extends BaseEnvironment {
 	ready() {
 		window.onbeforeunload=(e)=>{
 			if(this.reloadingStarted) {
@@ -448,7 +480,7 @@ class WebEnvironment extends Environment {
 	}
 }
 
-class NwEnvironment extends Environment {
+class NwEnvironment extends BaseEnvironment {
 	ready() {
 		$("#btn_zoom_in").click(function() {
 			NwZoomController.zoomIn();
@@ -487,6 +519,7 @@ class NwEnvironment extends Environment {
 }
 
 function detectEnvironment() {
+	// Check if we run in node-webkit or in a browser 
 	if(nwController.isNwActive()) {
 		return new NwEnvironment();
 	} else {
@@ -494,5 +527,6 @@ function detectEnvironment() {
 	}
 }
 
+// Set global variable for environment and fileManager 
 var environment = detectEnvironment();
 var fileManager = environment.getFileManager();

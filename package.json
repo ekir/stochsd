@@ -1,7 +1,16 @@
 {
-	"name": "StocSD",
+	"name": "StochSim",
 	"main": "index.html",
 	"window": {
-		"icon": "icons/stochsd.png"
+		"icon": "icons/stochsim.png"
+	},
+	"devDependencies": {
+		"gulp-useref": "^3.1.5"
+	},
+	"dependencies": {
+		"gulp": "^3.9.1"
+	},
+	"scripts": {
+		"build": "node_modules/gulp/bin/gulp.js"
 	}
 }
